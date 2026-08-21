@@ -1,0 +1,6 @@
+{
+  "name": "AstroInterval",
+  "description": "Intervalómetro por cable OTG para cámaras DSLR (Canon Rebel T6) con modo nocturno rojo.",
+  "requestFramePermissions": ["usb"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
