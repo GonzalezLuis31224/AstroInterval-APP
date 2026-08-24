@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { Camera, Image as ImageIcon, Play, Square, Settings2, Moon, Sun, Usb, MonitorPlay, AlertCircle, Maximize, Minimize, Video, VideoOff } from 'lucide-react';
 import { TethrManager } from 'tethr';
 import exifr from 'exifr';
-import { ParameterDial } from './components/ParameterDial';
+import { ParameterDial } from './ParameterDial';
 
 const FALLBACK_ISO = ["Auto", "100", "200", "400", "800", "1600", "3200", "6400"];
 const FALLBACK_APERTURE = ["1.8", "2.0", "2.2", "2.5", "2.8", "3.2", "3.5", "4.0", "4.5", "5.0", "5.6", "6.3", "7.1", "8.0", "9.0", "10", "11", "13", "14", "16", "18", "20", "22"];
