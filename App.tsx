@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Camera, Image as ImageIcon, Play, Square, Settings2, Moon, Sun, Usb, MonitorPlay, AlertCircle, Maximize, Minimize, Video, VideoOff } from 'lucide-react';
+import { Camera, Image as ImageIcon, Play, Square, Settings2, Moon, Sun, Usb, MonitorPlay, AlertCircle, Maximize, Minimize, Video, VideoOff, ZoomIn, ZoomOut } from 'lucide-react';
 import { TethrManager } from 'tethr';
 import exifr from 'exifr';
 import { ParameterDial } from './ParameterDial';
@@ -38,6 +38,9 @@ export default function App() {
   const [statusText, setStatusText] = useState("Esperando...");
   const [liveViewActive, setLiveViewActive] = useState(false);
   const liveViewActiveRef = useRef(false);
+  const [liveViewZoom, setLiveViewZoom] = useState(1);
+  const [zoomPos, setZoomPos] = useState({ x: 50, y: 50 });
+  const zoomDragRef = useRef({ isDragging: false, startX: 0, startY: 0, startPosX: 50, startPosY: 50 });
   useEffect(() => {
     liveViewActiveRef.current = liveViewActive;
   }, [liveViewActive]);
@@ -732,7 +735,75 @@ export default function App() {
         </div>
 
         {/* LIVE VIEW */}
-        <div id="liveview-container" className={`aspect-video rounded-xl border flex flex-col items-center justify-center gap-2 overflow-hidden relative ${isRedMode ? 'border-red-900 bg-black' : 'border-neutral-800 bg-neutral-900'}`}>
+        <div 
+          id="liveview-container" 
+          className={`aspect-video rounded-xl border flex flex-col items-center justify-center gap-2 overflow-hidden relative touch-none ${isRedMode ? 'border-red-900 bg-black' : 'border-neutral-800 bg-neutral-900'}`}
+          onPointerDown={(e) => {
+            if (liveViewZoom <= 1) return;
+            const container = e.currentTarget;
+            container.setPointerCapture(e.pointerId);
+            zoomDragRef.current = {
+              isDragging: true,
+              startX: e.clientX,
+              startY: e.clientY,
+              startPosX: zoomPos.x,
+              startPosY: zoomPos.y
+            };
+          }}
+          onPointerMove={(e) => {
+            if (zoomDragRef.current.isDragging && liveViewZoom > 1) {
+              const rect = e.currentTarget.getBoundingClientRect();
+              const dx = e.clientX - zoomDragRef.current.startX;
+              const dy = e.clientY - zoomDragRef.current.startY;
+              
+              const sensitivityX = 100 / (rect.width * (liveViewZoom * 0.5));
+              const sensitivityY = 100 / (rect.height * (liveViewZoom * 0.5));
+              
+              let newX = zoomDragRef.current.startPosX - (dx * sensitivityX);
+              let newY = zoomDragRef.current.startPosY - (dy * sensitivityY);
+              
+              newX = Math.max(0, Math.min(100, newX));
+              newY = Math.max(0, Math.min(100, newY));
+              
+              setZoomPos({ x: newX, y: newY });
+            }
+          }}
+          onPointerUp={(e) => {
+            zoomDragRef.current.isDragging = false;
+            e.currentTarget.releasePointerCapture(e.pointerId);
+          }}
+          onPointerCancel={(e) => {
+            zoomDragRef.current.isDragging = false;
+            e.currentTarget.releasePointerCapture(e.pointerId);
+          }}
+        >
+          {liveViewActive && (
+            <div className="absolute top-4 left-4 z-20 flex flex-col gap-2">
+              <button 
+                onClick={() => setLiveViewZoom(prev => Math.min(prev + 1, 10))}
+                className="p-2 bg-black/50 text-white rounded-full hover:bg-black/80 transition-colors"
+                title="Acercar (Zoom In)"
+              >
+                <ZoomIn className="w-5 h-5" />
+              </button>
+              {liveViewZoom > 1 && (
+                <button 
+                  onClick={() => { setLiveViewZoom(1); setZoomPos({x:50, y:50}); }}
+                  className="p-2 bg-black/50 text-white rounded-full hover:bg-black/80 transition-colors font-bold text-xs flex items-center justify-center w-9 h-9"
+                  title="Restablecer Zoom"
+                >
+                  {liveViewZoom}x
+                </button>
+              )}
+              <button 
+                onClick={() => setLiveViewZoom(prev => Math.max(prev - 1, 1))}
+                className="p-2 bg-black/50 text-white rounded-full hover:bg-black/80 transition-colors"
+                title="Alejar (Zoom Out)"
+              >
+                <ZoomOut className="w-5 h-5" />
+              </button>
+            </div>
+          )}
           {liveViewActive && (
             <button 
               onClick={() => {
@@ -756,6 +827,11 @@ export default function App() {
           <img 
             ref={videoRef as any}
             className={`absolute inset-0 w-full h-full object-contain ${liveViewActive ? 'opacity-100' : 'opacity-0'}`} 
+            style={{
+              transform: `scale(${liveViewZoom})`,
+              transformOrigin: `${zoomPos.x}% ${zoomPos.y}%`,
+              transition: zoomDragRef.current.isDragging ? 'none' : 'transform 0.2s ease-out'
+            }}
           />
           {!liveViewActive && (
             <>
@@ -763,7 +839,7 @@ export default function App() {
               <p className="text-sm opacity-50">Live View</p>
             </>
           )}
-          
+        </div>
           <button 
             onClick={async () => {
               if (camera) {
