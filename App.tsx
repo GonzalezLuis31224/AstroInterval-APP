@@ -735,7 +735,7 @@ export default function App() {
         </div>
 
         {/* LIVE VIEW */}
-        <div 
+<div 
           id="liveview-container" 
           className={`aspect-video rounded-xl border flex flex-col items-center justify-center gap-2 overflow-hidden relative touch-none ${isRedMode ? 'border-red-900 bg-black' : 'border-neutral-800 bg-neutral-900'}`}
           onPointerDown={(e) => {
@@ -839,7 +839,6 @@ export default function App() {
               <p className="text-sm opacity-50">Live View</p>
             </>
           )}
-        </div>
           <button 
             onClick={async () => {
               if (camera) {
