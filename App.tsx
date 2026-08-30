@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Camera, Image as ImageIcon, Play, Square, Settings2, Moon, Sun, Usb, MonitorPlay, AlertCircle, Maximize, Minimize, Video, VideoOff, ZoomIn, ZoomOut } from 'lucide-react';
+import { Camera, Image as ImageIcon, Play, Square, Settings2, Moon, Sun, Usb, MonitorPlay, AlertCircle, Maximize, Minimize, Video, VideoOff, ZoomIn, ZoomOut, Compass } from 'lucide-react';
 import { TethrManager } from 'tethr';
 import exifr from 'exifr';
 import { ParameterDial } from './ParameterDial';
@@ -36,6 +36,7 @@ export default function App() {
   const [cameraName, setCameraName] = useState<string>('');
   const [isRunning, setIsRunning] = useState(false);
   const [currentShot, setCurrentShot] = useState(0);
+  const [isLevelOpen, setIsLevelOpen] = useState(false);
   const [statusText, setStatusText] = useState("Esperando...");
   const [liveViewActive, setLiveViewActive] = useState(false);
   const liveViewActiveRef = useRef(false);
@@ -728,6 +729,16 @@ const loadPhotoDetails = async (handle: number, thumbBuffer: ArrayBuffer, url: s
             >
               {isRedMode ? <Moon className="w-5 h-5" /> : <Sun className="w-5 h-5" />}
             </button>
+
+            <button
+      onClick={() => setIsLevelOpen(true)}
+      className={`p-2 rounded-xl transition-colors border ${
+        isRedMode ? 'border-red-900/60 hover:bg-red-950/40 text-red-500' : 'border-neutral-800 hover:bg-neutral-800 text-neutral-400'
+      }`}
+      title="Nivel y Brújula Polar"
+    >
+      <Compass className="w-5 h-5" />
+    </button>
           </div>
         </div>
 
@@ -1204,7 +1215,7 @@ const loadPhotoDetails = async (handle: number, thumbBuffer: ArrayBuffer, url: s
         </div>
       ) : (
         <div className="text-xs opacity-60 font-mono flex items-center gap-1.5 text-neutral-400">
-          <span>Estimado: ~49,000+ disparos</span>
+          <span>No disponible en EXIF (Canon)</span>
         </div>
       )}
    </div>
@@ -1212,6 +1223,12 @@ const loadPhotoDetails = async (handle: number, thumbBuffer: ArrayBuffer, url: s
            </div>
         </div>
       )}
+      {/* Poner antes del último </div> */}
+      <BubbleLevelModal 
+        isOpen={isLevelOpen} 
+        onClose={() => setIsLevelOpen(false)} 
+        isRedMode={isRedMode} 
+      />
     </div>
   );
 }
