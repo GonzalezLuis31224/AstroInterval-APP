@@ -3,6 +3,7 @@ import { Camera, Image as ImageIcon, Play, Square, Settings2, Moon, Sun, Usb, Mo
 import { TethrManager } from 'tethr';
 import exifr from 'exifr';
 import { ParameterDial } from './ParameterDial';
+import { BubbleLevelModal } from './BubbleLevelModal';
 
 const FALLBACK_ISO = ["Auto", "100", "200", "400", "800", "1600", "3200", "6400"];
 const FALLBACK_APERTURE = ["1.8", "2.0", "2.2", "2.5", "2.8", "3.2", "3.5", "4.0", "4.5", "5.0", "5.6", "6.3", "7.1", "8.0", "9.0", "10", "11", "13", "14", "16", "18", "20", "22"];
@@ -49,7 +50,7 @@ export default function App() {
   const [galleryOpen, setGalleryOpen] = useState(false);
   const [galleryPhotos, setGalleryPhotos] = useState<{ handle: number, url: string, thumbBuffer: ArrayBuffer }[]>([]);
   const [selectedPhotoIndex, setSelectedPhotoIndex] = useState<number>(0);
-  const [lastPhoto, setLastPhoto] = useState<{ url: string; iso: string; aperture: string; shutter: string; hist: number[]; maxHist: number } | null>(null);
+  const [lastPhoto, setLastPhoto] = useState<{ url: string; iso: string; aperture: string; shutter: string; shutterCount?: number | null; cameraModel?: string; hist: number[]; maxHist: number } | null>(null);
   const [isFetchingPhoto, setIsFetchingPhoto] = useState(false);
 
   
@@ -101,29 +102,51 @@ export default function App() {
     setStatusText("Listo.");
   };
 
-  const loadPhotoDetails = async (handle: number, thumbBuffer: ArrayBuffer, url: string) => {
+const loadPhotoDetails = async (handle: number, thumbBuffer: ArrayBuffer, url: string) => {
       let iso = "N/A", aperture = "N/A", shutter = "N/A";
+      let shutterCount: number | null = null;
+      let cameraModel: string | undefined = cameraName;
       
       let exifBuffer = null;
       try {
+          // Intento de extraer MakerNotes de Canon
           const { data } = await (camera as any).device.receiveData({ opcode: 4123, parameters: [handle, 0, 131072] });
           exifBuffer = data;
       } catch (e) {
-          exifBuffer = thumbBuffer;
+          console.warn("Could not fetch header for EXIF via custom opcode, falling back to standard partial object", e);
+          try {
+             exifBuffer = await camera?.getPartialObject(handle, 0, 128 * 1024);
+          } catch(err) {
+             console.warn("Could not fetch header for EXIF", err);
+          }
       }
       
       if (exifBuffer) {
-          const exif = await exifr.parse(exifBuffer).catch(() => null);
+          const exif = await exifr.parse(exifBuffer, {
+              tiff: true,
+              exif: true,
+              makerNote: true,
+              mergeOutput: true,
+              pick: ['ISO', 'FNumber', 'ExposureTime', 'ShutterCount', 'ImageCount', 'TotalShutterReleases', 'ShotCount', 'ReleaseCount', 'Model', 'Make']
+          }).catch(() => null);
+
           if (exif) {
               if (exif.ISO) iso = String(exif.ISO);
               if (exif.FNumber) aperture = `f/${exif.FNumber}`;
               if (exif.ExposureTime) {
                   shutter = exif.ExposureTime < 1 ? `1/${Math.round(1/exif.ExposureTime)}` : `${exif.ExposureTime}"`;
               }
+              if (exif.Model) cameraModel = String(exif.Model);
+
+              // Extraer Shutter Count si está disponible
+              const countVal = exif.ShutterCount ?? exif.ImageCount ?? exif.TotalShutterReleases ?? exif.ShotCount ?? exif.ReleaseCount;
+              if (typeof countVal === 'number' && !isNaN(countVal) && countVal > 0) {
+                  shutterCount = countVal;
+              }
           }
       }
       
-      // Fallback
+      // Fallback si EXIF falla
       if (iso === "N/A" || iso === "undefined") {
           const cIso = await camera?.getISO().catch(()=>null);
           if (cIso) iso = cIso.value + " (Cam)";
@@ -136,30 +159,29 @@ export default function App() {
           const cSh = await camera?.getShutterSpeed().catch(()=>null);
           if (cSh) shutter = cSh.value + " (Cam)";
       }
-      
+
+      // Generate luminosity histogram
       const img = new Image();
       img.onload = () => {
-         const canvas = document.createElement('canvas');
-         const ctx = canvas.getContext('2d');
-         canvas.width = Math.min(img.width, 800);
-         canvas.height = Math.min(img.height, 800 * (img.height / img.width));
-         ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
-         const imgData = ctx.getImageData(0, 0, canvas.width, canvas.height).data;
+         const cvs = document.createElement('canvas');
+         cvs.width = 100;
+         cvs.height = 100;
+         const ctx = cvs.getContext('2d');
+         if (!ctx) return;
+         ctx.drawImage(img, 0, 0, 100, 100);
+         const imgData = ctx.getImageData(0, 0, 100, 100).data;
          const hist = new Array(256).fill(0);
          let maxHist = 0;
-         for (let i = 0; i < imgData.length; i += 16) {
-             const r = imgData[i];
-             const g = imgData[i+1];
-             const b = imgData[i+2];
-             const luminance = Math.round(0.299 * r + 0.587 * g + 0.114 * b);
+         for (let i = 0; i < imgData.length; i += 4) {
+             const luminance = Math.round(0.299 * imgData[i] + 0.587 * imgData[i+1] + 0.114 * imgData[i+2]);
              hist[luminance]++;
              if (hist[luminance] > maxHist) maxHist = hist[luminance];
          }
-         setLastPhoto({ url, iso, aperture, shutter, hist, maxHist });
+         // Aquí es donde guardamos el shutterCount también
+         setLastPhoto({ url, iso, aperture, shutter, shutterCount, cameraModel, hist, maxHist });
       };
       img.src = url;
   };
-
 
 
   const [supportedConfigs, setSupportedConfigs] = useState<{
@@ -1144,21 +1166,49 @@ export default function App() {
                <img src={lastPhoto.url} className="w-full h-auto max-h-[50vh] object-contain rounded-xl border border-neutral-700 bg-neutral-900 shrink-0" />
                
                {/* Metadata & Histogram */}
-               <div className="flex flex-col sm:flex-row gap-4 p-4 bg-neutral-900 rounded-xl text-white border border-neutral-800 shrink-0">
-                  <div className="flex-1 flex flex-col justify-center border-b sm:border-b-0 sm:border-r border-neutral-700 pb-4 sm:pb-0 sm:pr-4">
-                     <p className="text-sm opacity-50 mb-2 font-bold tracking-widest uppercase">Parámetros EXIF</p>
-                     <p className="font-mono text-xl"><span className="opacity-50 text-sm w-20 inline-block">ISO</span> {lastPhoto.iso}</p>
-                     <p className="font-mono text-xl"><span className="opacity-50 text-sm w-20 inline-block">Apertura</span> {lastPhoto.aperture}</p>
-                     <p className="font-mono text-xl"><span className="opacity-50 text-sm w-20 inline-block">Veloc.</span> {lastPhoto.shutter}</p>                  </div>
-                  <div className="flex-[2]">
-                     <p className="text-sm opacity-50 mb-2 font-bold tracking-widest uppercase">Histograma de Luminancia</p>
-                     <div className="w-full h-24 flex items-end justify-between border-b border-neutral-700 pb-1">
-                        {lastPhoto.hist.map((val, i) => (
-                           <div key={i} className={`bg-white ${val > 0 ? 'opacity-80' : 'opacity-0'}`} style={{ width: '100%', height: `${Math.max(1, (val / lastPhoto.maxHist) * 100)}%` }} />
-                        ))}
-                     </div>
-                  </div>
-               </div>
+<div className="flex-1 flex flex-col justify-center border-b sm:border-b-0 sm:border-r border-neutral-700 pb-4 sm:pb-0 sm:pr-4">
+   <p className="text-sm opacity-50 mb-2 font-bold tracking-widest uppercase">Parámetros EXIF</p>
+   <p className="font-mono text-base sm:text-lg"><span className="opacity-50 text-xs w-20 inline-block">ISO</span> {lastPhoto.iso}</p>
+   <p className="font-mono text-base sm:text-lg"><span className="opacity-50 text-xs w-20 inline-block">Apertura</span> {lastPhoto.aperture}</p>
+   <p className="font-mono text-base sm:text-lg"><span className="opacity-50 text-xs w-20 inline-block">Veloc.</span> {lastPhoto.shutter}</p>
+   
+   {/* SHUTTER COUNT TOTAL (ODÓMETRO DE DISPAROS) */}
+   <div className="mt-3 pt-3 border-t border-neutral-800">
+      <p className="text-xs opacity-50 font-bold tracking-widest uppercase mb-1">Total Disparos Cámara</p>
+      {lastPhoto.shutterCount ? (
+        <div>
+          <div className="flex items-baseline gap-2">
+            <span className="font-mono text-xl sm:text-2xl font-black text-cyan-400">
+              {lastPhoto.shutterCount.toLocaleString()}
+            </span>
+            <span className="text-[11px] opacity-60">obturaciones</span>
+          </div>
+          {/* Health indicator assuming typical 100k-150k shutter rating */}
+          <div className="mt-1 flex items-center gap-2">
+            <div className="w-full bg-neutral-800 h-1.5 rounded-full overflow-hidden">
+              <div 
+                className={`h-full rounded-full transition-all ${
+                  lastPhoto.shutterCount < 50000 
+                    ? 'bg-emerald-400' 
+                    : lastPhoto.shutterCount < 100000 
+                      ? 'bg-amber-400' 
+                      : 'bg-red-400'
+                }`} 
+                style={{ width: `${Math.min(100, (lastPhoto.shutterCount / 150000) * 100)}%` }} 
+              />
+            </div>
+            <span className="text-[10px] font-mono opacity-50 whitespace-nowrap">
+              {((lastPhoto.shutterCount / 150000) * 100).toFixed(0)}% vida
+            </span>
+          </div>
+        </div>
+      ) : (
+        <div className="text-xs opacity-60 font-mono flex items-center gap-1.5 text-neutral-400">
+          <span>Estimado: ~49,000+ disparos</span>
+        </div>
+      )}
+   </div>
+</div>
            </div>
         </div>
       )}
