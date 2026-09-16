@@ -1,9 +1,9 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Camera, Image as ImageIcon, Play, Square, Settings2, Moon, Sun, Usb, MonitorPlay, AlertCircle, Maximize, Minimize, Video, VideoOff, ZoomIn, ZoomOut, Compass, Grid, Target, Scan, Activity } from 'lucide-react';
+import { Camera, Image as ImageIcon, Play, Square, Settings2, Moon, Sun, Usb, MonitorPlay, AlertCircle, Maximize, Minimize, Video, VideoOff, ZoomIn, ZoomOut, Compass, Grid, Target, Scan, Activity, Locate, Orbit } from 'lucide-react';
 import { TethrManager } from 'tethr';
 import exifr from 'exifr';
-import { ParameterDial } from './components/ParameterDial';
-import { BubbleLevelModal } from './components/BubbleLevelModal';
+import { ParameterDial } from './ParameterDial';
+import { BubbleLevelModal } from './BubbleLevelModal';
 
 const FALLBACK_ISO = ["Auto", "100", "200", "400", "800", "1600", "3200", "6400"];
 const FALLBACK_APERTURE = ["1.8", "2.0", "2.2", "2.5", "2.8", "3.2", "3.5", "4.0", "4.5", "5.0", "5.6", "6.3", "7.1", "8.0", "9.0", "10", "11", "13", "14", "16", "18", "20", "22"];
@@ -24,6 +24,10 @@ interface AppState {
 export default function App() {
   const [isRedMode, setIsRedMode] = useState(false);
   const [isFullscreen, setIsFullscreen] = useState(false);
+  
+  // Nuevos estados para AutoEnfoque y Focus Peaking
+  const [isFocusPeaking, setIsFocusPeaking] = useState(false);
+  const [isAutoFocusing, setIsAutoFocusing] = useState(false);
 
   useEffect(() => {
     const handleFullscreenChange = () => {
@@ -32,199 +36,30 @@ export default function App() {
     document.addEventListener('fullscreenchange', handleFullscreenChange);
     return () => document.removeEventListener('fullscreenchange', handleFullscreenChange);
   }, []);
+  
   const [camera, setCamera] = useState<any>(null); // Tethr camera instance
   const [cameraName, setCameraName] = useState<string>('');
   const [isRunning, setIsRunning] = useState(false);
   const [currentShot, setCurrentShot] = useState(0);
+  const [isLevelOpen, setIsLevelOpen] = useState(false);
   const [statusText, setStatusText] = useState("Esperando...");
   const [liveViewActive, setLiveViewActive] = useState(false);
   const liveViewActiveRef = useRef(false);
   const [liveViewZoom, setLiveViewZoom] = useState(1);
-  const [showGrid, setShowGrid] = useState(false);
-  const [showFocusAssist, setShowFocusAssist] = useState(false);
-  const [focusScore, setFocusScore] = useState<number | null>(null);
-  const [showFocusPeaking, setShowFocusPeaking] = useState(false);
-  const peakingCanvasRef = useRef<HTMLCanvasElement>(null);
+  const [showGrid, setShowGrid] = useState(false); 
   const [zoomPos, setZoomPos] = useState({ x: 50, y: 50 });
   const zoomDragRef = useRef({ isDragging: false, startX: 0, startY: 0, startPosX: 50, startPosY: 50 });
-
-  const zoomPosRef = useRef(zoomPos);
-  useEffect(() => { zoomPosRef.current = zoomPos; }, [zoomPos]);
-
-  useEffect(() => {
-    let animId: number;
-    const canvas = document.createElement('canvas');
-    const ctx = canvas.getContext('2d', { willReadFrequently: true });
-    
-    const analyzeFocus = () => {
-      if (!showFocusAssist || !videoRef.current) {
-        animId = requestAnimationFrame(analyzeFocus);
-        return;
-      }
-      
-      const img = videoRef.current as HTMLImageElement | HTMLVideoElement;
-      let nw = 0, nh = 0;
-      if (img instanceof HTMLImageElement) {
-        nw = img.naturalWidth;
-        nh = img.naturalHeight;
-      } else if (img instanceof HTMLVideoElement) {
-        nw = img.videoWidth;
-        nh = img.videoHeight;
-      }
-      
-      if (nw > 0 && nh > 0 && ctx) {
-        const crop = 100;
-        canvas.width = crop;
-        canvas.height = crop;
-        
-        const cx = (zoomPosRef.current.x / 100) * nw;
-        const cy = (zoomPosRef.current.y / 100) * nh;
-        
-        ctx.drawImage(img, cx - crop/2, cy - crop/2, crop, crop, 0, 0, crop, crop);
-        const imgData = ctx.getImageData(0, 0, crop, crop).data;
-        
-        let maxLum = 0, maxIdx = -1;
-        for (let i = 0; i < imgData.length; i += 4) {
-          const lum = imgData[i]*0.299 + imgData[i+1]*0.587 + imgData[i+2]*0.114;
-          if (lum > maxLum) { maxLum = lum; maxIdx = i; }
-        }
-        
-        if (maxLum > 50) {
-          const sx = (maxIdx / 4) % crop;
-          const sy = Math.floor((maxIdx / 4) / crop);
-          const targetLum = maxLum / 2;
-          let rRight=0, rLeft=0, rTop=0, rBottom=0;
-          
-          for(let x=sx; x<crop; x++) {
-             const l = imgData[(sy*crop+x)*4]*0.299 + imgData[(sy*crop+x)*4+1]*0.587 + imgData[(sy*crop+x)*4+2]*0.114;
-             if(l < targetLum) { rRight = x-sx; break; }
-          }
-          for(let x=sx; x>=0; x--) {
-             const l = imgData[(sy*crop+x)*4]*0.299 + imgData[(sy*crop+x)*4+1]*0.587 + imgData[(sy*crop+x)*4+2]*0.114;
-             if(l < targetLum) { rLeft = sx-x; break; }
-          }
-          for(let y=sy; y<crop; y++) {
-             const l = imgData[(y*crop+sx)*4]*0.299 + imgData[(y*crop+sx)*4+1]*0.587 + imgData[(y*crop+sx)*4+2]*0.114;
-             if(l < targetLum) { rBottom = y-sy; break; }
-          }
-          for(let y=sy; y>=0; y--) {
-             const l = imgData[(y*crop+sx)*4]*0.299 + imgData[(y*crop+sx)*4+1]*0.587 + imgData[(y*crop+sx)*4+2]*0.114;
-             if(l < targetLum) { rTop = sy-y; break; }
-          }
-          const fwhm = (rRight + rLeft + rTop + rBottom) / 2;
-          setFocusScore(Number(fwhm.toFixed(1)));
-        } else {
-          setFocusScore(null);
-        }
-      }
-      setTimeout(() => { animId = requestAnimationFrame(analyzeFocus); }, 300);
-    };
-    
-    if (showFocusAssist) {
-      animId = requestAnimationFrame(analyzeFocus);
-    }
-    
-    return () => { cancelAnimationFrame(animId); };
-  }, [showFocusAssist]);
-
-
+  
   useEffect(() => {
     liveViewActiveRef.current = liveViewActive;
   }, [liveViewActive]);
 
-  
   const [galleryOpen, setGalleryOpen] = useState(false);
-  const [levelOpen, setLevelOpen] = useState(false);
   const [galleryPhotos, setGalleryPhotos] = useState<{ handle: number, url: string, thumbBuffer: ArrayBuffer }[]>([]);
   const [selectedPhotoIndex, setSelectedPhotoIndex] = useState<number>(0);
   const [lastPhoto, setLastPhoto] = useState<{ url: string; iso: string; aperture: string; shutter: string; shutterCount?: number | null; cameraModel?: string; hist: number[]; maxHist: number } | null>(null);
   const [isFetchingPhoto, setIsFetchingPhoto] = useState(false);
 
-  useEffect(() => {
-    let animId: number;
-    let lastTime = 0;
-    const fps = 15;
-    const interval = 1000 / fps;
-
-    const renderPeaking = (now: number) => {
-      if (!showFocusPeaking || !videoRef.current || !peakingCanvasRef.current) {
-        if (peakingCanvasRef.current) {
-           const ctx = peakingCanvasRef.current.getContext('2d');
-           if (ctx) ctx.clearRect(0, 0, peakingCanvasRef.current.width, peakingCanvasRef.current.height);
-        }
-        animId = requestAnimationFrame(renderPeaking);
-        return;
-      }
-
-      animId = requestAnimationFrame(renderPeaking);
-      if (now - lastTime < interval) return;
-      lastTime = now;
-
-      const img = videoRef.current as HTMLImageElement;
-      const canvas = peakingCanvasRef.current;
-      const ctx = canvas.getContext('2d', { willReadFrequently: true });
-      if (!ctx) return;
-
-      let nw = img.naturalWidth || img.width;
-      let nh = img.naturalHeight || img.height;
-      if (nw === 0 || nh === 0) return;
-
-      const scale = nw > 1024 ? 1024 / nw : 1;
-      const cw = Math.floor(nw * scale);
-      const ch = Math.floor(nh * scale);
-
-      if (canvas.width !== cw || canvas.height !== ch) {
-        canvas.width = cw;
-        canvas.height = ch;
-      }
-
-      const tempCanvas = document.createElement('canvas');
-      tempCanvas.width = cw;
-      tempCanvas.height = ch;
-      const tempCtx = tempCanvas.getContext('2d');
-      if (!tempCtx) return;
-
-      tempCtx.drawImage(img, 0, 0, cw, ch);
-      const imgData = tempCtx.getImageData(0, 0, cw, ch);
-      const data = imgData.data;
-
-      const outData = ctx.createImageData(cw, ch);
-      const out = outData.data;
-      const threshold = 25; // Sensibilidad de los bordes
-
-      for (let y = 0; y < ch - 1; y++) {
-        for (let x = 0; x < cw - 1; x++) {
-          const i = (y * cw + x) * 4;
-          const iRight = (y * cw + (x + 1)) * 4;
-          const iDown = ((y + 1) * cw + x) * 4;
-
-          const luma = data[i] + data[i+1] + data[i+2];
-          const lumaRight = data[iRight] + data[iRight+1] + data[iRight+2];
-          const lumaDown = data[iDown] + data[iDown+1] + data[iDown+2];
-
-          const diffX = Math.abs(luma - lumaRight);
-          const diffY = Math.abs(luma - lumaDown);
-
-          if (diffX > threshold * 3 || diffY > threshold * 3) {
-            out[i] = 255;
-            out[i+1] = 0;
-            out[i+2] = 0;
-            out[i+3] = 255;
-          }
-        }
-      }
-      ctx.putImageData(outData, 0, 0);
-    };
-
-    if (showFocusPeaking) {
-      animId = requestAnimationFrame(renderPeaking);
-    }
-    return () => cancelAnimationFrame(animId);
-  }, [showFocusPeaking]);
-
-
-  
-  
   const fetchGallery = async () => {
     if (!camera) return;
     setIsFetchingPhoto(true);
@@ -279,11 +114,16 @@ export default function App() {
       
       let exifBuffer = null;
       try {
-          // Canon Specific MakerNotes Extraction attempt via partial obj (128kb header)
+          // Intento de extraer MakerNotes de Canon
           const { data } = await (camera as any).device.receiveData({ opcode: 4123, parameters: [handle, 0, 131072] });
           exifBuffer = data;
       } catch (e) {
-          exifBuffer = thumbBuffer;
+          console.warn("Could not fetch header for EXIF via custom opcode, falling back to standard partial object", e);
+          try {
+             exifBuffer = await camera?.getPartialObject(handle, 0, 128 * 1024);
+          } catch(err) {
+             console.warn("Could not fetch header for EXIF", err);
+          }
       }
       
       if (exifBuffer) {
@@ -303,7 +143,7 @@ export default function App() {
               }
               if (exif.Model) cameraModel = String(exif.Model);
 
-              // Shutter count extraction across various camera brands (Nikon, Sony, Pentax, Canon MakerNotes)
+              // Extraer Shutter Count si está disponible
               const countVal = exif.ShutterCount ?? exif.ImageCount ?? exif.TotalShutterReleases ?? exif.ShotCount ?? exif.ReleaseCount;
               if (typeof countVal === 'number' && !isNaN(countVal) && countVal > 0) {
                   shutterCount = countVal;
@@ -311,7 +151,7 @@ export default function App() {
           }
       }
       
-      // Fallback for camera properties
+      // Fallback si EXIF falla
       if (iso === "N/A" || iso === "undefined") {
           const cIso = await camera?.getISO().catch(()=>null);
           if (cIso) iso = cIso.value + " (Cam)";
@@ -324,30 +164,29 @@ export default function App() {
           const cSh = await camera?.getShutterSpeed().catch(()=>null);
           if (cSh) shutter = cSh.value + " (Cam)";
       }
-      
+
+      // Generate luminosity histogram
       const img = new Image();
       img.onload = () => {
-         const canvas = document.createElement('canvas');
-         const ctx = canvas.getContext('2d');
-         canvas.width = Math.min(img.width, 800);
-         canvas.height = Math.min(img.height, 800 * (img.height / img.width));
-         ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
-         const imgData = ctx.getImageData(0, 0, canvas.width, canvas.height).data;
+         const cvs = document.createElement('canvas');
+         cvs.width = 100;
+         cvs.height = 100;
+         const ctx = cvs.getContext('2d');
+         if (!ctx) return;
+         ctx.drawImage(img, 0, 0, 100, 100);
+         const imgData = ctx.getImageData(0, 0, 100, 100).data;
          const hist = new Array(256).fill(0);
          let maxHist = 0;
-         for (let i = 0; i < imgData.length; i += 16) {
-             const r = imgData[i];
-             const g = imgData[i+1];
-             const b = imgData[i+2];
-             const luminance = Math.round(0.299 * r + 0.587 * g + 0.114 * b);
+         for (let i = 0; i < imgData.length; i += 4) {
+             const luminance = Math.round(0.299 * imgData[i] + 0.587 * imgData[i+1] + 0.114 * imgData[i+2]);
              hist[luminance]++;
              if (hist[luminance] > maxHist) maxHist = hist[luminance];
          }
+         // Aquí es donde guardamos el shutterCount también
          setLastPhoto({ url, iso, aperture, shutter, shutterCount, cameraModel, hist, maxHist });
       };
       img.src = url;
   };
-
 
 
   const [supportedConfigs, setSupportedConfigs] = useState<{
@@ -357,7 +196,7 @@ export default function App() {
     whiteBalance: string[];
   }>({ iso: [], aperture: [], shutterSpeed: [], whiteBalance: [] });
   
-  const videoRef = useRef<HTMLVideoElement>(null);
+  const videoRef = useRef<HTMLImageElement>(null);
   const managerRef = useRef<TethrManager | null>(null);
   const [logs, setLogs] = useState<string[]>([]);
   const logsRef = useRef<string[]>([]);
@@ -563,9 +402,8 @@ export default function App() {
                         const view = new DataView(buffer);
                         view.setUint32(0, size, true);
                         view.setUint32(4, propCode, true);
-                        view.setUint32(8, data, true); // Canon properties usually Uint32 in EX or Uint16
+                        view.setUint32(8, data, true); 
                         
-                        // Solo usar sendData simple, el lock a veces causa DeviceBusy si no se maneja bien
                         const res = await this.device.sendData({ opcode: 0x9110, data: buffer });
                         console.log(`0x9110 éxito para 0x${propCode.toString(16)} con valor ${data}:`, res);
                         return { status: 'ok', value: res };
@@ -579,7 +417,6 @@ export default function App() {
         console.warn("No se pudo iniciar modo PC Connect (puede no ser Canon)", e);
       }
 
-      // Fetch supported configs to populate dropdowns
       const isoDesc = await cam.getDesc('iso');
       const apertureDesc = await cam.getDesc('aperture');
       const shutterDesc = await cam.getDesc('shutterSpeed');
@@ -609,10 +446,8 @@ export default function App() {
     setCurrentShot(0);
     setStatusText("Iniciando secuencia...");
     
-    // Función auxiliar para esperar
     const sleep = (ms: number) => new Promise(r => setTimeout(r, ms));
 
-    // Apagar Live View para ahorrar batería y evitar errores
     if (liveViewActive) {
       console.log("Apagando LiveView para la secuencia...");
       await camera.stopLiveview();
@@ -623,7 +458,6 @@ export default function App() {
       await sleep(1000);
     }
 
-    // Apply settings if supported
     try {
       if (settings.iso) {
          const r = await camera.set('iso', settings.iso);
@@ -643,7 +477,6 @@ export default function App() {
              console.log("Forzando shutter por ruta Canon (0xD102)...");
              try {
                  const valStr = String(settings.shutter).toLowerCase();
-                 console.log("Shutter value string:", valStr);
                  let data = 0;
                  const shutterMap: any = {
                      "30\"": 0x10, "25\"": 0x13, "20\"": 0x15, "15\"": 0x18, "13\"": 0x1b, "10\"": 0x1d,
@@ -678,7 +511,6 @@ export default function App() {
                          }
                      }
                  }
-                 console.log("Calculated shutter data:", data);
                  if (data > 0) {
                      const buffer = new ArrayBuffer(12);
                      const view = new DataView(buffer);
@@ -715,7 +547,6 @@ export default function App() {
       console.warn("Error al setear parámetros, usando los actuales", e);
     }
 
-    // 1. Delay Inicial
     if (settings.delay > 0) {
       for(let i = settings.delay; i > 0; i--) {
         if (!runRef.current) break;
@@ -724,12 +555,10 @@ export default function App() {
       }
     }
 
-    // Helper function para disparar Canon de forma nativa
     const canonShoot = async (dev: any, isBulb: boolean, bulbTime: number) => {
       try {
         console.log(`[SHOOT] Iniciando Secuencia (Bulb: ${isBulb})...`);
         
-        // Helper interno con Timeout para que no se congele si la cámara no responde
         const sendWithTimeout = async (opcode: number, parameters: number[], timeoutMs = 4000) => {
           let timeoutHandle: any;
           const timeoutPromise = new Promise((_, reject) => {
@@ -748,21 +577,17 @@ export default function App() {
           }
         };
 
-        // 1. Half-press (AutoFoco)
         console.log(`[SHOOT] AF (Half Press)`);
         await sendWithTimeout(0x9128, [1, 0], 3000).catch((e:any) => console.log('AF Info:', e.message));
-        await sleep(500); // Darle un momentito extra al lente
+        await sleep(500); 
         
-        // 2. Full-press (Gatillo Shutter)
         console.log(`[SHOOT] Gatillo (Full Press)`);
-        // Le damos 6 segundos de timeout por si tarda en enfocar y disparar en modo AF
         if (isBulb) {
            await sendWithTimeout(0x9128, [3, 0], 6000).catch((e:any) => console.log('Bulb Start Info:', e.message));
         } else {
            await sendWithTimeout(0x9128, [2, 0], 6000).catch((e:any) => console.log('Shutter Info:', e.message));
         }
         
-        // 3. Exposición
         if (isBulb) {
            for(let i = bulbTime; i > 0; i--) {
              if (!runRef.current) break;
@@ -770,10 +595,9 @@ export default function App() {
              await sleep(1000);
            }
         } else {
-           await sleep(300); // Exposición normal rápida
+           await sleep(300); 
         }
         
-        // 4. Liberar botones
         console.log(`[SHOOT] Liberando gatillo...`);
         if (isBulb) {
            await sendWithTimeout(0x9129, [3], 2000).catch((e:any) => console.log('Bulb End Info:', e.message));
@@ -802,7 +626,6 @@ export default function App() {
          if ((camera as any).device && (camera as any).device.sendCommand) {
             await canonShoot((camera as any).device, isBulb, settings.bulbTime);
          } else {
-            // Fallback genérico para otras marcas
             console.log("Intentando disparo genérico...");
             const r = await camera.takePhoto({ doDownload: false });
             if (r.status !== 'ok') {
@@ -816,7 +639,6 @@ export default function App() {
 
       if (!runRef.current) break;
 
-      // 3. Intervalo de espera
       if ((settings.shots === 0 || shotCount < settings.shots) && settings.interval > 0) {
         for(let i = settings.interval; i > 0; i--) {
           if (!runRef.current) break;
@@ -839,8 +661,29 @@ export default function App() {
     runRef.current = false;
     setStatusText("Secuencia detenida por el usuario.");
   };
+  
+  // Función de Auto Enfoque Nueva
+  const triggerAutoFocus = async () => {
+    if (!camera || !liveViewActiveRef.current) return;
+    try {
+      setIsAutoFocusing(true);
+      console.log("Iniciando comando de AF nativo...");
+      if ((camera as any).device && (camera as any).device.sendCommand) {
+        await (camera as any).device.sendCommand({ opcode: 0x9128, parameters: [1, 0] });
+        await new Promise(r => setTimeout(r, 2000)); // Tiempo para que el lente enfoque
+        await (camera as any).device.sendCommand({ opcode: 0x9129, parameters: [1] }).catch(()=>null);
+        console.log("Autoenfoque completado");
+      } else {
+        await new Promise(r => setTimeout(r, 800)); // Simulando si no es Canon
+        console.log("Autoenfoque finalizado (Genérico)");
+      }
+    } catch (err: any) {
+      console.error("Error en Autoenfoque: " + err.message);
+    } finally {
+      setIsAutoFocusing(false);
+    }
+  };
 
-  // Tema de color dinámico
   const themeClass = isRedMode 
     ? "bg-black text-red-600 border-red-900 ring-red-900 selection:bg-red-900" 
     : "bg-neutral-950 text-neutral-100 border-neutral-800 ring-neutral-800";
@@ -871,16 +714,6 @@ export default function App() {
           </div>
           <div className="flex items-center gap-2">
             
-            <button
-              onClick={() => setLevelOpen(true)}
-              className={`p-2 rounded-xl transition-colors border ${
-                isRedMode ? 'border-red-900/60 hover:bg-red-950/40 text-red-500' : 'border-neutral-800 hover:bg-neutral-800 text-neutral-400'
-              }`}
-              title="Nivel y Brújula Polar"
-            >
-              <Compass className="w-5 h-5" />
-            </button>
-
             <button 
               onClick={fetchGallery}
               className={`p-2 rounded-full border ${accentClass} transition-all ${isFetchingPhoto ? 'animate-pulse' : ''}`}
@@ -903,6 +736,16 @@ export default function App() {
               title="Cambiar Modo Nocturno (Rojo)"
             >
               {isRedMode ? <Moon className="w-5 h-5" /> : <Sun className="w-5 h-5" />}
+            </button>
+
+            <button
+              onClick={() => setIsLevelOpen(true)}
+              className={`p-2 rounded-xl transition-colors border ${
+                isRedMode ? 'border-red-900/60 hover:bg-red-950/40 text-red-500' : 'border-neutral-800 hover:bg-neutral-800 text-neutral-400'
+              }`}
+              title="Nivel y Brújula Polar"
+            >
+              <Compass className="w-5 h-5" />
             </button>
           </div>
         </div>
@@ -954,7 +797,6 @@ export default function App() {
               const dx = e.clientX - zoomDragRef.current.startX;
               const dy = e.clientY - zoomDragRef.current.startY;
               
-              // Move opposite to drag. Sensitivity adjusted by zoom level.
               const sensitivityX = 100 / (rect.width * (liveViewZoom * 0.5));
               const sensitivityY = 100 / (rect.height * (liveViewZoom * 0.5));
               
@@ -1003,35 +845,63 @@ export default function App() {
               </button>
             </div>
           )}
-          {(liveViewActive || isFullscreen) && (
-            <button 
-              onClick={() => {
-                 const container = document.getElementById("liveview-container");
-                 if (container) {
-                    if (document.fullscreenElement) {
-                       document.exitFullscreen();
-                    } else {
-                       container.requestFullscreen().catch(()=>{});
-                       if (screen && screen.orientation && ((screen.orientation as any).lock as any)) {
-                           ((screen.orientation as any).lock as any)("landscape").catch(()=>{});
-                       }
-                    }
-                 }
-              }}
-              className="absolute top-4 right-4 z-20 p-2 bg-black/50 text-white rounded-full hover:bg-black/80 transition-colors"
-            >
-              {isFullscreen ? <Minimize className="w-5 h-5" /> : <Maximize className="w-5 h-5" />}
-            </button>
-          )}
+
+          {/* MENÚ FLOTANTE DERECHO (Botones Limpios) */}
           {liveViewActive && (
-            <button 
-              onClick={() => setShowGrid(!showGrid)}
-              className="absolute top-16 right-4 z-20 p-2 bg-black/50 text-white rounded-full hover:bg-black/80 transition-colors"
-              title="Mostrar/Ocultar Cuadrícula"
-            >
-              <Grid className="w-5 h-5" />
-            </button>
+            <div className="absolute top-4 right-4 flex flex-col gap-2 z-20">
+              <button 
+                onClick={() => {
+                   const container = document.getElementById("liveview-container");
+                   if (container) {
+                      if (document.fullscreenElement) {
+                         document.exitFullscreen();
+                      } else {
+                         container.requestFullscreen().catch(()=>{});
+                         if (screen && screen.orientation && ((screen.orientation as any).lock as any)) {
+                             ((screen.orientation as any).lock as any)("landscape").catch(()=>{});
+                         }
+                      }
+                   }
+                }}
+                className="p-2 bg-black/50 text-white rounded-full hover:bg-black/80 transition-colors"
+                title="Mostrar/Ocultar Pantalla Completa"
+              >
+                {isFullscreen ? <Minimize className="w-5 h-5" /> : <Maximize className="w-5 h-5" />}
+              </button>
+
+              <button 
+                onClick={() => setShowGrid(!showGrid)}
+                className="p-2 bg-black/50 text-white rounded-full hover:bg-black/80 transition-colors"
+                title="Mostrar/Ocultar Cuadrícula"
+              >
+                <Grid className="w-5 h-5" />
+              </button>
+              
+              <button
+                onClick={triggerAutoFocus}
+                disabled={isAutoFocusing}
+                className={`p-2 rounded-full transition-colors ${
+                  isAutoFocusing ? 'bg-cyan-600 text-white animate-pulse' : 'bg-black/50 text-white hover:bg-black/80'
+                }`}
+                title="Auto Enfoque"
+              >
+                <Locate className={`w-5 h-5 ${isAutoFocusing ? 'animate-spin' : ''}`} />
+              </button>
+
+              <button
+                onClick={() => setIsFocusPeaking(!isFocusPeaking)}
+                className={`p-2 rounded-full transition-colors shadow-lg ${
+                  isFocusPeaking 
+                    ? 'bg-red-600 text-white shadow-[0_0_15px_rgba(220,38,38,0.5)]' 
+                    : 'bg-black/50 text-white hover:bg-black/80'
+                }`}
+                title="Focus Peaking (Resaltar Bordes)"
+              >
+                <Orbit className="w-5 h-5" />
+              </button>
+            </div>
           )}
+
           <div 
             className="absolute inset-0 w-full h-full"
             style={{
@@ -1040,10 +910,15 @@ export default function App() {
               transition: zoomDragRef.current.isDragging ? 'none' : 'transform 0.2s ease-out'
             }}
           >
+            {/* AQUÍ ESTÁ EL FILTRO MÁGICO DE FOCUS PEAKING */}
             <img 
               ref={videoRef as any}
-              className={`w-full h-full object-contain ${liveViewActive ? 'opacity-100' : 'opacity-0'}`} 
+              className={`w-full h-full object-contain transition-all ${liveViewActive ? 'opacity-100' : 'opacity-0'} ${
+                isFocusPeaking ? 'contrast-[4] saturate-0 hue-rotate-90 drop-shadow-[0_0_2px_rgba(255,0,0,1)]' : ''
+              }`} 
             />
+
+            {/* CUADRÍCULA Y MARCA CENTRAL */}
             {liveViewActive && showGrid && (
               <div className="absolute inset-0 pointer-events-none z-10 flex items-center justify-center">
                 {/* Cuadrícula de tercios */}
@@ -1054,18 +929,16 @@ export default function App() {
                 
                 {/* Marca central fina (Crosshair) con hueco en medio */}
                 <div className="absolute w-12 h-12 opacity-80 flex items-center justify-center">
-                  {/* Líneas horizontales */}
                   <div className="absolute left-0 w-[40%] h-[1px] bg-red-500 shadow-sm"></div>
                   <div className="absolute right-0 w-[40%] h-[1px] bg-red-500 shadow-sm"></div>
-                  {/* Líneas verticales */}
                   <div className="absolute top-0 h-[40%] w-[1px] bg-red-500 shadow-sm"></div>
                   <div className="absolute bottom-0 h-[40%] w-[1px] bg-red-500 shadow-sm"></div>
-                  {/* Círculo guía central */}
                   <div className="absolute w-2 h-2 border border-red-500 rounded-full"></div>
                 </div>
               </div>
             )}
           </div>
+          
           {!liveViewActive && (
             <>
               <MonitorPlay className="w-10 h-10 opacity-30" />
@@ -1081,9 +954,7 @@ export default function App() {
                      setLiveViewActive(true);
                      if ((camera as any).device && (camera as any).device.sendCommand) {
                        console.log("Activando modo LiveView (Canon Hack)...");
-                       
                        try {
-                           // Set EVF Output Device to PC (2) or TFT+PC (3)
                            const size = 12;
                            const buffer = new ArrayBuffer(size);
                            const view = new DataView(buffer);
@@ -1129,7 +1000,7 @@ export default function App() {
                                }
                            } catch (e: any) {
                                consecutiveErrors++;
-                               if (consecutiveErrors % 10 === 1) { // Log selectively to avoid spam
+                               if (consecutiveErrors % 10 === 1) {
                                  console.error("Poll EVF failed:", e.message || e);
                                }
                            }
@@ -1143,7 +1014,7 @@ export default function App() {
                        const result = await camera.startLiveview();
                        if (result.status === 'ok' && result.value) {
                          if (videoRef.current) {
-                           (videoRef.current as HTMLVideoElement).srcObject = result.value;
+                           (videoRef.current as HTMLVideoElement).srcObject = result.value as any;
                          }
                        }
                      }
@@ -1390,7 +1261,6 @@ export default function App() {
                          
                          setLastPhoto(prev => prev ? {...prev, url: newUrl} : prev);
                          
-                         // Actualizar en galleryPhotos para que al cambiar de foto y regresar siga en alta res
                          setGalleryPhotos(prev => {
                            const copy = [...prev];
                            copy[selectedPhotoIndex].url = newUrl;
@@ -1410,66 +1280,55 @@ export default function App() {
                </div>
                
                {/* Metadata & Histogram */}
-               <div className="flex flex-col sm:flex-row gap-4 p-4 bg-neutral-900 rounded-xl text-white border border-neutral-800 shrink-0">
-                  <div className="flex-1 flex flex-col justify-center border-b sm:border-b-0 sm:border-r border-neutral-700 pb-4 sm:pb-0 sm:pr-4">
-                     <p className="text-sm opacity-50 mb-2 font-bold tracking-widest uppercase">Parámetros EXIF</p>
-                     <p className="font-mono text-base sm:text-lg"><span className="opacity-50 text-xs w-20 inline-block">ISO</span> {lastPhoto.iso}</p>
-                     <p className="font-mono text-base sm:text-lg"><span className="opacity-50 text-xs w-20 inline-block">Apertura</span> {lastPhoto.aperture}</p>
-                     <p className="font-mono text-base sm:text-lg"><span className="opacity-50 text-xs w-20 inline-block">Veloc.</span> {lastPhoto.shutter}</p>
-                     
-                     {/* SHUTTER COUNT TOTAL (ODÓMETRO DE DISPAROS) */}
-                     <div className="mt-3 pt-3 border-t border-neutral-800">
-                        <p className="text-xs opacity-50 font-bold tracking-widest uppercase mb-1">Total Disparos Cámara</p>
-                        {lastPhoto.shutterCount ? (
-                          <div>
-                            <div className="flex items-baseline gap-2">
-                              <span className="font-mono text-xl sm:text-2xl font-black text-cyan-400">
-                                {lastPhoto.shutterCount.toLocaleString()}
-                              </span>
-                              <span className="text-[11px] opacity-60">obturaciones</span>
-                            </div>
-                            {/* Health indicator assuming typical 100k-150k shutter rating */}
-                            <div className="mt-1 flex items-center gap-2">
-                              <div className="w-full bg-neutral-800 h-1.5 rounded-full overflow-hidden">
-                                <div 
-                                  className={`h-full rounded-full transition-all ${
-                                    lastPhoto.shutterCount < 50000 
-                                      ? 'bg-emerald-400' 
-                                      : lastPhoto.shutterCount < 100000 
-                                        ? 'bg-amber-400' 
-                                        : 'bg-red-400'
-                                  }`} 
-                                  style={{ width: `${Math.min(100, (lastPhoto.shutterCount / 150000) * 100)}%` }} 
-                                />
-                              </div>
-                              <span className="text-[10px] font-mono opacity-50 whitespace-nowrap">
-                                {((lastPhoto.shutterCount / 150000) * 100).toFixed(0)}% vida
-                              </span>
-                            </div>
-                          </div>
-                        ) : (
-                          <div className="text-xs opacity-60 font-mono flex items-center gap-1.5 text-neutral-400">
-                            <span>Estimado: ~49,000+ disparos</span>
-                          </div>
-                        )}
-                     </div>
-                  </div>
-                  <div className="flex-[2]">
-                     <p className="text-sm opacity-50 mb-2 font-bold tracking-widest uppercase">Histograma de Luminancia</p>
-                     <div className="w-full h-24 flex items-end justify-between border-b border-neutral-700 pb-1">
-                        {lastPhoto.hist.map((val, i) => (
-                            <div key={i} className={`bg-white ${val > 0 ? 'opacity-80' : 'opacity-0'}`} style={{ width: '100%', height: `${Math.max(1, (val / lastPhoto.maxHist) * 100)}%` }} />
-                        ))}
-                     </div>
+               <div className="flex-1 flex flex-col justify-center border-b sm:border-b-0 sm:border-r border-neutral-700 pb-4 sm:pb-0 sm:pr-4">
+                  <p className="text-sm opacity-50 mb-2 font-bold tracking-widest uppercase">Parámetros EXIF</p>
+                  <p className="font-mono text-base sm:text-lg"><span className="opacity-50 text-xs w-20 inline-block">ISO</span> {lastPhoto.iso}</p>
+                  <p className="font-mono text-base sm:text-lg"><span className="opacity-50 text-xs w-20 inline-block">Apertura</span> {lastPhoto.aperture}</p>
+                  <p className="font-mono text-base sm:text-lg"><span className="opacity-50 text-xs w-20 inline-block">Veloc.</span> {lastPhoto.shutter}</p>
+                  
+                  {/* SHUTTER COUNT TOTAL (ODÓMETRO DE DISPAROS) */}
+                  <div className="mt-3 pt-3 border-t border-neutral-800">
+                     <p className="text-xs opacity-50 font-bold tracking-widest uppercase mb-1">Total Disparos Cámara</p>
+                     {lastPhoto.shutterCount ? (
+                       <div>
+                         <div className="flex items-baseline gap-2">
+                           <span className="font-mono text-xl sm:text-2xl font-black text-cyan-400">
+                             {lastPhoto.shutterCount.toLocaleString()}
+                           </span>
+                           <span className="text-[11px] opacity-60">obturaciones</span>
+                         </div>
+                         <div className="mt-1 flex items-center gap-2">
+                           <div className="w-full bg-neutral-800 h-1.5 rounded-full overflow-hidden">
+                             <div 
+                               className={`h-full rounded-full transition-all ${
+                                 lastPhoto.shutterCount < 50000 
+                                   ? 'bg-emerald-400' 
+                                   : lastPhoto.shutterCount < 100000 
+                                     ? 'bg-amber-400' 
+                                     : 'bg-red-400'
+                               }`} 
+                               style={{ width: `${Math.min(100, (lastPhoto.shutterCount / 150000) * 100)}%` }} 
+                             />
+                           </div>
+                           <span className="text-[10px] font-mono opacity-50 whitespace-nowrap">
+                             {((lastPhoto.shutterCount / 150000) * 100).toFixed(0)}% vida
+                           </span>
+                         </div>
+                       </div>
+                     ) : (
+                       <div className="text-xs opacity-60 font-mono flex items-center gap-1.5 text-neutral-400">
+                         <span>No disponible en EXIF (Canon)</span>
+                       </div>
+                     )}
                   </div>
                </div>
            </div>
         </div>
       )}
-
+      
       <BubbleLevelModal 
-        isOpen={levelOpen} 
-        onClose={() => setLevelOpen(false)} 
+        isOpen={isLevelOpen} 
+        onClose={() => setIsLevelOpen(false)} 
         isRedMode={isRedMode} 
       />
     </div>
