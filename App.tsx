@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Camera, Image as ImageIcon, Play, Square, Settings2, Moon, Sun, Usb, MonitorPlay, AlertCircle, Maximize, Minimize, Video, VideoOff, ZoomIn, ZoomOut, Compass, Grid, Target, Scan } from 'lucide-react';
+import { Camera, Image as ImageIcon, Play, Square, Settings2, Moon, Sun, Usb, MonitorPlay, AlertCircle, Maximize, Minimize, Video, VideoOff, ZoomIn, ZoomOut, Compass, Grid, Target, Scan, Activity } from 'lucide-react';
 import { TethrManager } from 'tethr';
 import exifr from 'exifr';
 import { ParameterDial } from './ParameterDial';
@@ -42,6 +42,8 @@ export default function App() {
   const liveViewActiveRef = useRef(false);
   const [liveViewZoom, setLiveViewZoom] = useState(1);
   const [showGrid, setShowGrid] = useState(false); 
+  const [showFocusPeaking, setShowFocusPeaking] = useState(false);
+  const peakingCanvasRef = useRef<HTMLCanvasElement>(null);
   const [zoomPos, setZoomPos] = useState({ x: 50, y: 50 });
   const zoomDragRef = useRef({ isDragging: false, startX: 0, startY: 0, startPosX: 50, startPosY: 50 });
   useEffect(() => {
@@ -55,7 +57,87 @@ export default function App() {
   const [lastPhoto, setLastPhoto] = useState<{ url: string; iso: string; aperture: string; shutter: string; shutterCount?: number | null; cameraModel?: string; hist: number[]; maxHist: number } | null>(null);
   const [isFetchingPhoto, setIsFetchingPhoto] = useState(false);
 
-  
+useEffect(() => {
+    let animId: number;
+    let lastTime = 0;
+    const fps = 15;
+    const interval = 1000 / fps;
+
+    const renderPeaking = (now: number) => {
+      if (!showFocusPeaking || !videoRef.current || !peakingCanvasRef.current) {
+        if (peakingCanvasRef.current) {
+           const ctx = peakingCanvasRef.current.getContext('2d');
+           if (ctx) ctx.clearRect(0, 0, peakingCanvasRef.current.width, peakingCanvasRef.current.height);
+        }
+        animId = requestAnimationFrame(renderPeaking);
+        return;
+      }
+
+      animId = requestAnimationFrame(renderPeaking);
+      if (now - lastTime < interval) return;
+      lastTime = now;
+
+      const img = videoRef.current as HTMLImageElement;
+      const canvas = peakingCanvasRef.current;
+      const ctx = canvas.getContext('2d', { willReadFrequently: true });
+      if (!ctx) return;
+
+      let nw = img.naturalWidth || img.width;
+      let nh = img.naturalHeight || img.height;
+      if (nw === 0 || nh === 0) return;
+
+      const scale = nw > 1024 ? 1024 / nw : 1;
+      const cw = Math.floor(nw * scale);
+      const ch = Math.floor(nh * scale);
+
+      if (canvas.width !== cw || canvas.height !== ch) {
+        canvas.width = cw;
+        canvas.height = ch;
+      }
+
+      const tempCanvas = document.createElement('canvas');
+      tempCanvas.width = cw;
+      tempCanvas.height = ch;
+      const tempCtx = tempCanvas.getContext('2d');
+      if (!tempCtx) return;
+
+      tempCtx.drawImage(img, 0, 0, cw, ch);
+      const imgData = tempCtx.getImageData(0, 0, cw, ch);
+      const data = imgData.data;
+
+      const outData = ctx.createImageData(cw, ch);
+      const out = outData.data;
+      const threshold = 25; 
+
+      for (let y = 0; y < ch - 1; y++) {
+        for (let x = 0; x < cw - 1; x++) {
+          const i = (y * cw + x) * 4;
+          const iRight = (y * cw + (x + 1)) * 4;
+          const iDown = ((y + 1) * cw + x) * 4;
+
+          const luma = data[i] + data[i+1] + data[i+2];
+          const lumaRight = data[iRight] + data[iRight+1] + data[iRight+2];
+          const lumaDown = data[iDown] + data[iDown+1] + data[iDown+2];
+
+          const diffX = Math.abs(luma - lumaRight);
+          const diffY = Math.abs(luma - lumaDown);
+
+          if (diffX > threshold * 3 || diffY > threshold * 3) {
+            out[i] = 255;
+            out[i+1] = 0;
+            out[i+2] = 0;
+            out[i+3] = 255;
+          }
+        }
+      }
+      ctx.putImageData(outData, 0, 0);
+    };
+
+    if (showFocusPeaking) {
+      animId = requestAnimationFrame(renderPeaking);
+    }
+    return () => cancelAnimationFrame(animId);
+  }, [showFocusPeaking]);
   
   const fetchGallery = async () => {
     if (!camera) return;
@@ -906,6 +988,16 @@ const loadPhotoDetails = async (handle: number, thumbBuffer: ArrayBuffer, url: s
               <Scan className="w-5 h-5" />
             </button>
           )}
+  {/* BOTÓN DE FOCUS PEAKING */}
+          {(liveViewActive || isFullscreen) && (
+            <button 
+              onClick={() => setShowFocusPeaking(!showFocusPeaking)}
+              className={`absolute top-52 right-4 z-20 p-2 text-white rounded-full transition-colors ${showFocusPeaking ? 'bg-red-600 hover:bg-red-500 shadow-[0_0_15px_rgba(220,38,38,0.5)]' : 'bg-black/50 hover:bg-black/80'}`}
+              title="Focus Peaking (Resaltar Bordes de Enfoque)"
+            >
+              <Activity className="w-5 h-5" />
+            </button>
+          )}
 <div 
             className="absolute inset-0 w-full h-full"
             style={{
@@ -940,6 +1032,11 @@ const loadPhotoDetails = async (handle: number, thumbBuffer: ArrayBuffer, url: s
               ref={videoRef as any}
               className={`w-full h-full object-contain ${liveViewActive ? 'opacity-100' : 'opacity-0'}`} 
             />
+  {/* CANVAS PARA FOCUS PEAKING */}
+          <canvas
+            ref={peakingCanvasRef}
+            className={`absolute inset-0 w-full h-full object-contain pointer-events-none z-10 transition-opacity ${(showFocusPeaking && liveViewActive) ? 'opacity-100' : 'opacity-0'}`}
+          />
             {/* CUADRÍCULA Y MARCA CENTRAL */}
             {liveViewActive && showGrid && (
               <div className="absolute inset-0 pointer-events-none z-10 flex items-center justify-center">
