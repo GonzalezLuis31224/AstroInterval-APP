@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Camera, Image as ImageIcon, Play, Square, Settings2, Moon, Sun, Usb, MonitorPlay, AlertCircle, Maximize, Minimize, Video, VideoOff, ZoomIn, ZoomOut, Compass } from 'lucide-react';
+import { Camera, Image as ImageIcon, Play, Square, Settings2, Moon, Sun, Usb, MonitorPlay, AlertCircle, Maximize, Minimize, Video, VideoOff, ZoomIn, ZoomOut, Compass, Grid } from 'lucide-react';
 import { TethrManager } from 'tethr';
 import exifr from 'exifr';
 import { ParameterDial } from './ParameterDial';
@@ -41,6 +41,7 @@ export default function App() {
   const [liveViewActive, setLiveViewActive] = useState(false);
   const liveViewActiveRef = useRef(false);
   const [liveViewZoom, setLiveViewZoom] = useState(1);
+  const [showGrid, setShowGrid] = useState(false); 
   const [zoomPos, setZoomPos] = useState({ x: 50, y: 50 });
   const zoomDragRef = useRef({ isDragging: false, startX: 0, startY: 0, startPosX: 50, startPosY: 50 });
   useEffect(() => {
@@ -857,15 +858,51 @@ const loadPhotoDetails = async (handle: number, thumbBuffer: ArrayBuffer, url: s
               <Maximize className="w-5 h-5" />
             </button>
           )}
-          <img 
-            ref={videoRef as any}
-            className={`absolute inset-0 w-full h-full object-contain ${liveViewActive ? 'opacity-100' : 'opacity-0'}`} 
+  {/* BOTÓN NUEVO DE CUADRÍCULA */}
+          {liveViewActive && (
+            <button 
+              onClick={() => setShowGrid(!showGrid)}
+              className="absolute top-16 right-4 z-20 p-2 bg-black/50 text-white rounded-full hover:bg-black/80 transition-colors"
+              title="Mostrar/Ocultar Cuadrícula"
+            >
+              <Grid className="w-5 h-5" />
+            </button>
+          )}
+<div 
+            className="absolute inset-0 w-full h-full"
             style={{
               transform: `scale(${liveViewZoom})`,
               transformOrigin: `${zoomPos.x}% ${zoomPos.y}%`,
               transition: zoomDragRef.current.isDragging ? 'none' : 'transform 0.2s ease-out'
             }}
-          />
+          >
+            <img 
+              ref={videoRef as any}
+              className={`w-full h-full object-contain ${liveViewActive ? 'opacity-100' : 'opacity-0'}`} 
+            />
+            {/* CUADRÍCULA Y MARCA CENTRAL */}
+            {liveViewActive && showGrid && (
+              <div className="absolute inset-0 pointer-events-none z-10 flex items-center justify-center">
+                {/* Cuadrícula de tercios */}
+                <div className="absolute top-1/3 left-0 right-0 border-t border-white/20"></div>
+                <div className="absolute top-2/3 left-0 right-0 border-t border-white/20"></div>
+                <div className="absolute left-1/3 top-0 bottom-0 border-l border-white/20"></div>
+                <div className="absolute left-2/3 top-0 bottom-0 border-l border-white/20"></div>
+                
+                {/* Marca central fina (Crosshair) con hueco en medio */}
+                <div className="absolute w-12 h-12 opacity-80 flex items-center justify-center">
+                  {/* Líneas horizontales */}
+                  <div className="absolute left-0 w-[40%] h-[1px] bg-red-500 shadow-sm"></div>
+                  <div className="absolute right-0 w-[40%] h-[1px] bg-red-500 shadow-sm"></div>
+                  {/* Líneas verticales */}
+                  <div className="absolute top-0 h-[40%] w-[1px] bg-red-500 shadow-sm"></div>
+                  <div className="absolute bottom-0 h-[40%] w-[1px] bg-red-500 shadow-sm"></div>
+                  {/* Círculo guía central */}
+                  <div className="absolute w-2 h-2 border border-red-500 rounded-full"></div>
+                </div>
+              </div>
+            )}
+          </div>
           {!liveViewActive && (
             <>
               <MonitorPlay className="w-10 h-10 opacity-30" />
