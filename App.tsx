@@ -838,7 +838,8 @@ const loadPhotoDetails = async (handle: number, thumbBuffer: ArrayBuffer, url: s
               </button>
             </div>
           )}
-          {liveViewActive && (
+{/* Botón Pantalla Completa */}
+          {(liveViewActive || isFullscreen) && (
             <button 
               onClick={() => {
                  const container = document.getElementById("liveview-container");
@@ -854,12 +855,13 @@ const loadPhotoDetails = async (handle: number, thumbBuffer: ArrayBuffer, url: s
                  }
               }}
               className="absolute top-4 right-4 z-20 p-2 bg-black/50 text-white rounded-full hover:bg-black/80 transition-colors"
+              title="Mostrar/Ocultar Pantalla Completa"
             >
-              <Maximize className="w-5 h-5" />
+              {isFullscreen ? <Minimize className="w-5 h-5" /> : <Maximize className="w-5 h-5" />}
             </button>
           )}
   {/* BOTÓN NUEVO DE CUADRÍCULA */}
-          {liveViewActive && (
+          {(liveViewActive || isFullscreen) && (
             <button 
               onClick={() => setShowGrid(!showGrid)}
               className="absolute top-16 right-4 z-20 p-2 bg-black/50 text-white rounded-full hover:bg-black/80 transition-colors"
@@ -1210,8 +1212,40 @@ const loadPhotoDetails = async (handle: number, thumbBuffer: ArrayBuffer, url: s
                  </div>
                )}
                
-               {/* Main Image */}
-               <img src={lastPhoto.url} className="w-full h-auto max-h-[50vh] object-contain rounded-xl border border-neutral-700 bg-neutral-900 shrink-0" />
+  {/* Main Image y Boton Alta Res */}
+               <div className="flex flex-col gap-2 shrink-0">
+                 <div className="flex justify-between items-center px-2">
+                   <h3 className="text-white font-bold opacity-70">Vista Previa</h3>
+                   <button 
+                     className="px-4 py-1.5 bg-neutral-800 border border-neutral-600 hover:bg-neutral-700 text-white rounded-lg text-sm transition-colors shadow-lg"
+                     onClick={async () => {
+                       try {
+                         setIsFetchingPhoto(true);
+                         const handle = galleryPhotos[selectedPhotoIndex].handle;
+                         const buffer = await (camera as any).getObject(handle);
+                         const blob = new Blob([buffer], { type: 'image/jpeg' });
+                         const newUrl = URL.createObjectURL(blob);
+                         
+                         setLastPhoto(prev => prev ? {...prev, url: newUrl} : prev);
+                         
+                         // Actualizar en galleryPhotos para que al cambiar de foto y regresar siga en alta res
+                         setGalleryPhotos(prev => {
+                           const copy = [...prev];
+                           copy[selectedPhotoIndex].url = newUrl;
+                           return copy;
+                         });
+                         setIsFetchingPhoto(false);
+                       } catch(e: any) {
+                         setIsFetchingPhoto(false);
+                         alert("Error cargando alta calidad. " + (e.message || ""));
+                       }
+                     }}
+                   >
+                     {isFetchingPhoto ? 'Descargando...' : '📷 Cargar Alta Resolución (Lento)'}
+                   </button>
+                 </div>
+                 <img src={lastPhoto.url} className="w-full h-auto max-h-[50vh] object-contain rounded-xl border border-neutral-700 bg-neutral-900" />
+               </div>
                
                {/* Metadata & Histogram */}
 <div className="flex-1 flex flex-col justify-center border-b sm:border-b-0 sm:border-r border-neutral-700 pb-4 sm:pb-0 sm:pr-4">
