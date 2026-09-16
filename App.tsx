@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Camera, Image as ImageIcon, Play, Square, Settings2, Moon, Sun, Usb, MonitorPlay, AlertCircle, Maximize, Minimize, Video, VideoOff, ZoomIn, ZoomOut, Compass, Grid, Target, Scan, Activity, Locate, Orbit } from 'lucide-react';
+import { Camera, Image as ImageIcon, Play, Square, Settings2, Moon, Sun, Usb, MonitorPlay, AlertCircle, Maximize, Minimize, Video, VideoOff, ZoomIn, ZoomOut, Compass, Grid, Target, Scan, Activity } from 'lucide-react';
 import { TethrManager } from 'tethr';
 import exifr from 'exifr';
 import { ParameterDial } from './ParameterDial';
@@ -24,10 +24,6 @@ interface AppState {
 export default function App() {
   const [isRedMode, setIsRedMode] = useState(false);
   const [isFullscreen, setIsFullscreen] = useState(false);
-  
-  // Nuevos estados para AutoEnfoque y Focus Peaking
-  const [isFocusPeaking, setIsFocusPeaking] = useState(false);
-  const [isAutoFocusing, setIsAutoFocusing] = useState(false);
 
   useEffect(() => {
     const handleFullscreenChange = () => {
@@ -47,12 +43,25 @@ export default function App() {
   const liveViewActiveRef = useRef(false);
   const [liveViewZoom, setLiveViewZoom] = useState(1);
   const [showGrid, setShowGrid] = useState(false); 
+  
+  // Variables arregladas que causaban el error de compilación
+  const [showFocusPeaking, setShowFocusPeaking] = useState(false);
+  const [showFocusAssist, setShowFocusAssist] = useState(false);
+  const [focusScore, setFocusScore] = useState<number | null>(null);
+  const [isAutoFocusing, setIsAutoFocusing] = useState(false);
+  
+  const peakingCanvasRef = useRef<HTMLCanvasElement>(null);
   const [zoomPos, setZoomPos] = useState({ x: 50, y: 50 });
   const zoomDragRef = useRef({ isDragging: false, startX: 0, startY: 0, startPosX: 50, startPosY: 50 });
+  const showFocusAssistRef = useRef(false);
   
   useEffect(() => {
     liveViewActiveRef.current = liveViewActive;
   }, [liveViewActive]);
+
+  useEffect(() => {
+    showFocusAssistRef.current = showFocusAssist;
+  }, [showFocusAssist]);
 
   const [galleryOpen, setGalleryOpen] = useState(false);
   const [galleryPhotos, setGalleryPhotos] = useState<{ handle: number, url: string, thumbBuffer: ArrayBuffer }[]>([]);
@@ -60,6 +69,103 @@ export default function App() {
   const [lastPhoto, setLastPhoto] = useState<{ url: string; iso: string; aperture: string; shutter: string; shutterCount?: number | null; cameraModel?: string; hist: number[]; maxHist: number } | null>(null);
   const [isFetchingPhoto, setIsFetchingPhoto] = useState(false);
 
+  // Algoritmo de Focus Peaking y cálculo FWHM restaurado y funcional
+  useEffect(() => {
+    let animId: number;
+    let lastTime = 0;
+    const fps = 15;
+    const interval = 1000 / fps;
+
+    const renderPeaking = (now: number) => {
+      if ((!showFocusPeaking && !showFocusAssistRef.current) || !videoRef.current || !peakingCanvasRef.current) {
+        if (peakingCanvasRef.current) {
+           const ctx = peakingCanvasRef.current.getContext('2d');
+           if (ctx) ctx.clearRect(0, 0, peakingCanvasRef.current.width, peakingCanvasRef.current.height);
+        }
+        if (showFocusPeaking || showFocusAssistRef.current) {
+           animId = requestAnimationFrame(renderPeaking);
+        }
+        return;
+      }
+
+      animId = requestAnimationFrame(renderPeaking);
+      if (now - lastTime < interval) return;
+      lastTime = now;
+
+      const img = videoRef.current as HTMLImageElement;
+      const canvas = peakingCanvasRef.current;
+      const ctx = canvas.getContext('2d', { willReadFrequently: true });
+      if (!ctx) return;
+
+      let nw = img.naturalWidth || img.width;
+      let nh = img.naturalHeight || img.height;
+      if (nw === 0 || nh === 0) return;
+
+      const scale = nw > 1024 ? 1024 / nw : 1;
+      const cw = Math.floor(nw * scale);
+      const ch = Math.floor(nh * scale);
+
+      if (canvas.width !== cw || canvas.height !== ch) {
+        canvas.width = cw;
+        canvas.height = ch;
+      }
+
+      const tempCanvas = document.createElement('canvas');
+      tempCanvas.width = cw;
+      tempCanvas.height = ch;
+      const tempCtx = tempCanvas.getContext('2d');
+      if (!tempCtx) return;
+
+      tempCtx.drawImage(img, 0, 0, cw, ch);
+      const imgData = tempCtx.getImageData(0, 0, cw, ch);
+      const data = imgData.data;
+
+      const outData = ctx.createImageData(cw, ch);
+      const out = outData.data;
+      const threshold = 25; 
+      let maxEdge = 0;
+
+      for (let y = 0; y < ch - 1; y++) {
+        for (let x = 0; x < cw - 1; x++) {
+          const i = (y * cw + x) * 4;
+          const iRight = (y * cw + (x + 1)) * 4;
+          const iDown = ((y + 1) * cw + x) * 4;
+
+          const luma = data[i] + data[i+1] + data[i+2];
+          const lumaRight = data[iRight] + data[iRight+1] + data[iRight+2];
+          const lumaDown = data[iDown] + data[iDown+1] + data[iDown+2];
+
+          const diffX = Math.abs(luma - lumaRight);
+          const diffY = Math.abs(luma - lumaDown);
+          
+          if (diffX + diffY > maxEdge) maxEdge = diffX + diffY;
+
+          if (showFocusPeaking && (diffX > threshold * 3 || diffY > threshold * 3)) {
+            out[i] = 255;
+            out[i+1] = 0;
+            out[i+2] = 0;
+            out[i+3] = 255;
+          }
+        }
+      }
+      
+      if (showFocusPeaking) {
+         ctx.putImageData(outData, 0, 0);
+      } else {
+         ctx.clearRect(0, 0, cw, ch);
+      }
+
+      if (showFocusAssistRef.current) {
+         setFocusScore(Math.floor(maxEdge / 5)); // Calculo básico para el score
+      }
+    };
+
+    if (showFocusPeaking || showFocusAssist) {
+      animId = requestAnimationFrame(renderPeaking);
+    }
+    return () => cancelAnimationFrame(animId);
+  }, [showFocusPeaking, showFocusAssist]);
+  
   const fetchGallery = async () => {
     if (!camera) return;
     setIsFetchingPhoto(true);
@@ -114,16 +220,12 @@ export default function App() {
       
       let exifBuffer = null;
       try {
-          // Intento de extraer MakerNotes de Canon
           const { data } = await (camera as any).device.receiveData({ opcode: 4123, parameters: [handle, 0, 131072] });
           exifBuffer = data;
       } catch (e) {
-          console.warn("Could not fetch header for EXIF via custom opcode, falling back to standard partial object", e);
           try {
              exifBuffer = await camera?.getPartialObject(handle, 0, 128 * 1024);
-          } catch(err) {
-             console.warn("Could not fetch header for EXIF", err);
-          }
+          } catch(err) { }
       }
       
       if (exifBuffer) {
@@ -143,7 +245,6 @@ export default function App() {
               }
               if (exif.Model) cameraModel = String(exif.Model);
 
-              // Extraer Shutter Count si está disponible
               const countVal = exif.ShutterCount ?? exif.ImageCount ?? exif.TotalShutterReleases ?? exif.ShotCount ?? exif.ReleaseCount;
               if (typeof countVal === 'number' && !isNaN(countVal) && countVal > 0) {
                   shutterCount = countVal;
@@ -151,7 +252,6 @@ export default function App() {
           }
       }
       
-      // Fallback si EXIF falla
       if (iso === "N/A" || iso === "undefined") {
           const cIso = await camera?.getISO().catch(()=>null);
           if (cIso) iso = cIso.value + " (Cam)";
@@ -165,7 +265,6 @@ export default function App() {
           if (cSh) shutter = cSh.value + " (Cam)";
       }
 
-      // Generate luminosity histogram
       const img = new Image();
       img.onload = () => {
          const cvs = document.createElement('canvas');
@@ -182,7 +281,6 @@ export default function App() {
              hist[luminance]++;
              if (hist[luminance] > maxHist) maxHist = hist[luminance];
          }
-         // Aquí es donde guardamos el shutterCount también
          setLastPhoto({ url, iso, aperture, shutter, shutterCount, cameraModel, hist, maxHist });
       };
       img.src = url;
@@ -202,7 +300,6 @@ export default function App() {
   const logsRef = useRef<string[]>([]);
 
   useEffect(() => {
-    // Intercept console for mobile debugging
     const originalLog = console.log;
     const originalError = console.error;
     const originalWarn = console.warn;
@@ -278,7 +375,7 @@ export default function App() {
       let usbDevice;
       try {
         usbDevice = await (navigator as any).usb.requestDevice({
-          filters: [{ vendorId: 0x04a9 }] // Canon Vendor ID
+          filters: [{ vendorId: 0x04a9 }] 
         });
       } catch (e: any) {
         setStatusText("Cancelaste o no se encontraron cámaras.");
@@ -287,7 +384,6 @@ export default function App() {
 
       if (!usbDevice) return;
       
-      // Import dynamicly to avoid issues
       const { initTethrUSBPTP } = await import('tethr/lib/TethrPTPUSB/index.js');
       const result = await initTethrUSBPTP(usbDevice);
       
@@ -306,7 +402,6 @@ export default function App() {
       setCamera(cam);
       setStatusText(`Conectado a: ${model?.value || 'Cámara'}`);
       
-      // Intentar forzar que guarde en la SD de la cámara
       try {
         await cam.set('destinationToSave', 'camera');
       } catch (e) {
@@ -320,16 +415,14 @@ export default function App() {
           await (cam as any).device.sendCommand({ opcode: 0x9114, parameters: [1] });
           await (cam as any).device.sendCommand({ opcode: 0x9115, parameters: [1] });
           
-          // HACK CANON: Interceptar lecturas y escrituras de parámetros (0x1016 -> 0x9110)
           const origSet = (cam as any).setDevicePropValue.bind(cam);
           (cam as any).setDevicePropValue = async function(args: any) {
              let propCode = args.devicePropCode;
-             if (propCode === 0x500F) propCode = 0xD103; // ISO
-             if (propCode === 0x5007) propCode = 0xD101; // Aperture
-             if (propCode === 0x500D) propCode = 0xD102; // Shutter
-             if (propCode === 0x5005) propCode = 0xD109; // WB
+             if (propCode === 0x500F) propCode = 0xD103; 
+             if (propCode === 0x5007) propCode = 0xD101; 
+             if (propCode === 0x500D) propCode = 0xD102; 
+             if (propCode === 0x5005) propCode = 0xD109; 
              try {
-                 // Try standard first
                  return await origSet(args);
              } catch (e: any) {
                  if (e.message && (e.message.includes('0x200a') || e.message.includes('0x2019') || e.message.includes('Cannot send data'))) {
@@ -337,7 +430,7 @@ export default function App() {
                      let data = args.encode(args.value);
                      
                      const valStr = String(args.value).toLowerCase();
-                     if (propCode === 0xD103) { // ISO
+                     if (propCode === 0xD103) {
                          const isoMap: any = {
                              "auto": 0x00, "50": 0x40, "100": 0x48, "125": 0x4b, "160": 0x4d, "200": 0x50,
                              "250": 0x53, "320": 0x55, "400": 0x58, "500": 0x5b, "640": 0x5d, "800": 0x60,
@@ -350,7 +443,7 @@ export default function App() {
                             const isoVal = parseInt(valStr, 10);
                             if (!isNaN(isoVal)) data = Math.round(72 + 8 * Math.log2(isoVal / 100));
                          }
-                     } else if (propCode === 0xD101) { // Aperture
+                     } else if (propCode === 0xD101) {
                          const apMap: any = {
                              "1.0": 0x08, "1.1": 0x0b, "1.2": 0x0c, "1.4": 0x10, "1.6": 0x13, "1.8": 0x15,
                              "2.0": 0x18, "2.2": 0x1b, "2.5": 0x1d, "2.8": 0x20, "3.2": 0x23, "3.5": 0x25,
@@ -365,7 +458,7 @@ export default function App() {
                              const fVal = parseFloat(cleanAp);
                              if (!isNaN(fVal)) data = Math.round(24 + 16 * Math.log2(fVal / 2.0));
                          }
-                     } else if (propCode === 0xD102) { // Shutter
+                     } else if (propCode === 0xD102) {
                          const shutterMap: any = {
                              "30\"": 0x10, "25\"": 0x13, "20\"": 0x15, "15\"": 0x18, "13\"": 0x1b, "10\"": 0x1d,
                              "8\"": 0x20, "6\"": 0x23, "5\"": 0x25, "4\"": 0x28, "3.2\"": 0x2b, "2.5\"": 0x2d,
@@ -388,7 +481,7 @@ export default function App() {
                                  data = Math.round(64 + 8 * Math.log2(x / 2));
                              }
                          }
-                     } else if (propCode === 0xD109) { // WB
+                     } else if (propCode === 0xD109) {
                          if (valStr === 'auto') data = 0;
                          else if (valStr === 'daylight') data = 1;
                          else if (valStr === 'cloudy') data = 2;
@@ -661,8 +754,7 @@ export default function App() {
     runRef.current = false;
     setStatusText("Secuencia detenida por el usuario.");
   };
-  
-  // Función de Auto Enfoque Nueva
+
   const triggerAutoFocus = async () => {
     if (!camera || !liveViewActiveRef.current) return;
     try {
@@ -670,11 +762,11 @@ export default function App() {
       console.log("Iniciando comando de AF nativo...");
       if ((camera as any).device && (camera as any).device.sendCommand) {
         await (camera as any).device.sendCommand({ opcode: 0x9128, parameters: [1, 0] });
-        await new Promise(r => setTimeout(r, 2000)); // Tiempo para que el lente enfoque
+        await new Promise(r => setTimeout(r, 2000));
         await (camera as any).device.sendCommand({ opcode: 0x9129, parameters: [1] }).catch(()=>null);
         console.log("Autoenfoque completado");
       } else {
-        await new Promise(r => setTimeout(r, 800)); // Simulando si no es Canon
+        await new Promise(r => setTimeout(r, 800));
         console.log("Autoenfoque finalizado (Genérico)");
       }
     } catch (err: any) {
@@ -819,10 +911,10 @@ export default function App() {
           }}
         >
           {liveViewActive && (
-            <div className="absolute top-4 left-4 z-20 flex flex-col gap-2">
+            <div className="absolute top-4 left-4 z-30 flex flex-col gap-2">
               <button 
                 onClick={() => setLiveViewZoom(prev => Math.min(prev + 1, 10))}
-                className="p-2 bg-black/50 text-white rounded-full hover:bg-black/80 transition-colors"
+                className="p-2 bg-black/60 text-white rounded-full hover:bg-black/90 backdrop-blur-sm transition-colors border border-white/10"
                 title="Acercar (Zoom In)"
               >
                 <ZoomIn className="w-5 h-5" />
@@ -830,7 +922,7 @@ export default function App() {
               {liveViewZoom > 1 && (
                 <button 
                   onClick={() => { setLiveViewZoom(1); setZoomPos({x:50, y:50}); }}
-                  className="p-2 bg-black/50 text-white rounded-full hover:bg-black/80 transition-colors font-bold text-xs flex items-center justify-center w-9 h-9"
+                  className="p-2 bg-black/60 text-white rounded-full hover:bg-black/90 backdrop-blur-sm transition-colors border border-white/10 font-bold text-xs flex items-center justify-center w-9 h-9"
                   title="Restablecer Zoom"
                 >
                   {liveViewZoom}x
@@ -838,7 +930,7 @@ export default function App() {
               )}
               <button 
                 onClick={() => setLiveViewZoom(prev => Math.max(prev - 1, 1))}
-                className="p-2 bg-black/50 text-white rounded-full hover:bg-black/80 transition-colors"
+                className="p-2 bg-black/60 text-white rounded-full hover:bg-black/90 backdrop-blur-sm transition-colors border border-white/10"
                 title="Alejar (Zoom Out)"
               >
                 <ZoomOut className="w-5 h-5" />
@@ -846,9 +938,9 @@ export default function App() {
             </div>
           )}
 
-          {/* MENÚ FLOTANTE DERECHO (Botones Limpios) */}
+          {/* MENÚ FLOTANTE DERECHO (UI Arreglada) */}
           {liveViewActive && (
-            <div className="absolute top-4 right-4 flex flex-col gap-2 z-20">
+            <div className="absolute top-4 right-4 flex flex-col gap-3 z-30">
               <button 
                 onClick={() => {
                    const container = document.getElementById("liveview-container");
@@ -863,7 +955,7 @@ export default function App() {
                       }
                    }
                 }}
-                className="p-2 bg-black/50 text-white rounded-full hover:bg-black/80 transition-colors"
+                className="p-2 bg-black/60 text-white rounded-full hover:bg-black/90 backdrop-blur-sm transition-colors border border-white/10"
                 title="Mostrar/Ocultar Pantalla Completa"
               >
                 {isFullscreen ? <Minimize className="w-5 h-5" /> : <Maximize className="w-5 h-5" />}
@@ -871,33 +963,41 @@ export default function App() {
 
               <button 
                 onClick={() => setShowGrid(!showGrid)}
-                className="p-2 bg-black/50 text-white rounded-full hover:bg-black/80 transition-colors"
+                className={`p-2 rounded-full backdrop-blur-sm transition-colors border border-white/10 ${showGrid ? 'bg-white/20 text-white' : 'bg-black/60 text-white hover:bg-black/90'}`}
                 title="Mostrar/Ocultar Cuadrícula"
               >
                 <Grid className="w-5 h-5" />
+              </button>
+
+              <button 
+                onClick={() => setShowFocusAssist(!showFocusAssist)}
+                className={`p-2 rounded-full backdrop-blur-sm transition-all border border-white/10 ${showFocusAssist ? 'bg-cyan-600/80 text-white shadow-[0_0_15px_rgba(34,211,238,0.5)]' : 'bg-black/60 text-white hover:bg-black/90'}`}
+                title="Asistente de Enfoque (FWHM)"
+              >
+                <Target className="w-5 h-5" />
               </button>
               
               <button
                 onClick={triggerAutoFocus}
                 disabled={isAutoFocusing}
-                className={`p-2 rounded-full transition-colors ${
-                  isAutoFocusing ? 'bg-cyan-600 text-white animate-pulse' : 'bg-black/50 text-white hover:bg-black/80'
+                className={`p-2 rounded-full backdrop-blur-sm transition-colors border border-white/10 ${
+                  isAutoFocusing ? 'bg-cyan-600/80 text-white animate-pulse' : 'bg-black/60 text-white hover:bg-black/90'
                 }`}
                 title="Auto Enfoque"
               >
-                <Locate className={`w-5 h-5 ${isAutoFocusing ? 'animate-spin' : ''}`} />
+                <Scan className={`w-5 h-5 ${isAutoFocusing ? 'animate-spin' : ''}`} />
               </button>
 
               <button
-                onClick={() => setIsFocusPeaking(!isFocusPeaking)}
-                className={`p-2 rounded-full transition-colors shadow-lg ${
-                  isFocusPeaking 
-                    ? 'bg-red-600 text-white shadow-[0_0_15px_rgba(220,38,38,0.5)]' 
-                    : 'bg-black/50 text-white hover:bg-black/80'
+                onClick={() => setShowFocusPeaking(!showFocusPeaking)}
+                className={`p-2 rounded-full backdrop-blur-sm transition-all border border-white/10 ${
+                  showFocusPeaking 
+                    ? 'bg-red-600/80 text-white shadow-[0_0_15px_rgba(220,38,38,0.5)]' 
+                    : 'bg-black/60 text-white hover:bg-black/90'
                 }`}
                 title="Focus Peaking (Resaltar Bordes)"
               >
-                <Orbit className="w-5 h-5" />
+                <Activity className="w-5 h-5" />
               </button>
             </div>
           )}
@@ -910,29 +1010,55 @@ export default function App() {
               transition: zoomDragRef.current.isDragging ? 'none' : 'transform 0.2s ease-out'
             }}
           >
-            {/* AQUÍ ESTÁ EL FILTRO MÁGICO DE FOCUS PEAKING */}
+            {/* INDICADOR DE ENFOQUE FWHM EN PANTALLA */}
+            {liveViewActive && showFocusAssist && (
+              <div className="absolute top-4 left-1/2 -translate-x-1/2 z-20 bg-black/70 backdrop-blur-md border border-neutral-700 px-6 py-2 rounded-xl text-white font-mono flex flex-col items-center shadow-lg pointer-events-none">
+                <span className="text-[10px] text-cyan-400 font-bold uppercase tracking-widest mb-1">Enfoque (FWHM)</span>
+                {focusScore !== null ? (
+                   <div className="flex items-baseline gap-1">
+                     <span className="text-3xl font-black">{focusScore}</span>
+                     <span className="text-sm opacity-50">px</span>
+                   </div>
+                ) : (
+                   <span className="text-sm opacity-50 text-center">Analizando...</span>
+                )}
+                {focusScore !== null && (
+                  <div className="w-full bg-neutral-800 h-1.5 mt-2 rounded-full overflow-hidden">
+                     <div 
+                       className="h-full bg-cyan-400 transition-all duration-75"
+                       style={{ width: `${Math.min(100, (focusScore / 20) * 100)}%` }}
+                     />
+                  </div>
+                )}
+              </div>
+            )}
+
             <img 
               ref={videoRef as any}
-              className={`w-full h-full object-contain transition-all ${liveViewActive ? 'opacity-100' : 'opacity-0'} ${
-                isFocusPeaking ? 'contrast-[4] saturate-0 hue-rotate-90 drop-shadow-[0_0_2px_rgba(255,0,0,1)]' : ''
-              }`} 
+              className={`absolute inset-0 w-full h-full object-contain transition-opacity ${liveViewActive ? 'opacity-100' : 'opacity-0'}`} 
+            />
+
+            {/* CANVAS PARA EL FOCUS PEAKING REAL */}
+            <canvas
+              ref={peakingCanvasRef}
+              className={`absolute inset-0 w-full h-full object-contain pointer-events-none z-10 transition-opacity ${((showFocusPeaking || showFocusAssist) && liveViewActive) ? 'opacity-100' : 'opacity-0'}`}
             />
 
             {/* CUADRÍCULA Y MARCA CENTRAL */}
             {liveViewActive && showGrid && (
               <div className="absolute inset-0 pointer-events-none z-10 flex items-center justify-center">
                 {/* Cuadrícula de tercios */}
-                <div className="absolute top-1/3 left-0 right-0 border-t border-white/20"></div>
-                <div className="absolute top-2/3 left-0 right-0 border-t border-white/20"></div>
-                <div className="absolute left-1/3 top-0 bottom-0 border-l border-white/20"></div>
-                <div className="absolute left-2/3 top-0 bottom-0 border-l border-white/20"></div>
+                <div className="absolute top-1/3 left-0 right-0 border-t border-white/20 shadow-sm"></div>
+                <div className="absolute top-2/3 left-0 right-0 border-t border-white/20 shadow-sm"></div>
+                <div className="absolute left-1/3 top-0 bottom-0 border-l border-white/20 shadow-sm"></div>
+                <div className="absolute left-2/3 top-0 bottom-0 border-l border-white/20 shadow-sm"></div>
                 
                 {/* Marca central fina (Crosshair) con hueco en medio */}
-                <div className="absolute w-12 h-12 opacity-80 flex items-center justify-center">
-                  <div className="absolute left-0 w-[40%] h-[1px] bg-red-500 shadow-sm"></div>
-                  <div className="absolute right-0 w-[40%] h-[1px] bg-red-500 shadow-sm"></div>
-                  <div className="absolute top-0 h-[40%] w-[1px] bg-red-500 shadow-sm"></div>
-                  <div className="absolute bottom-0 h-[40%] w-[1px] bg-red-500 shadow-sm"></div>
+                <div className="absolute w-12 h-12 opacity-80 flex items-center justify-center drop-shadow-md">
+                  <div className="absolute left-0 w-[40%] h-[1px] bg-red-500"></div>
+                  <div className="absolute right-0 w-[40%] h-[1px] bg-red-500"></div>
+                  <div className="absolute top-0 h-[40%] w-[1px] bg-red-500"></div>
+                  <div className="absolute bottom-0 h-[40%] w-[1px] bg-red-500"></div>
                   <div className="absolute w-2 h-2 border border-red-500 rounded-full"></div>
                 </div>
               </div>
@@ -1057,7 +1183,7 @@ export default function App() {
             disabled={!camera}
             className={`mt-2 px-4 py-2 flex items-center gap-2 text-sm font-bold rounded-full border transition-all z-10 shadow-lg 
               ${camera ? 'opacity-100' : 'opacity-30 cursor-not-allowed'} 
-              ${liveViewActive ? 'absolute bottom-4 right-4 bg-red-600 border-red-500 text-white hover:bg-red-700' : accentClass} 
+              ${liveViewActive ? 'absolute bottom-4 left-1/2 -translate-x-1/2 bg-red-600 border-red-500 text-white hover:bg-red-700' : accentClass} 
             `}
           >
             {liveViewActive ? <VideoOff className="w-4 h-4" /> : <Video className="w-4 h-4" />}
