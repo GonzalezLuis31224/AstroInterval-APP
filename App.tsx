@@ -44,7 +44,6 @@ export default function App() {
   const [liveViewZoom, setLiveViewZoom] = useState(1);
   const [showGrid, setShowGrid] = useState(false); 
   
-  // Variables arregladas que causaban el error de compilación
   const [showFocusPeaking, setShowFocusPeaking] = useState(false);
   const [showFocusAssist, setShowFocusAssist] = useState(false);
   const [focusScore, setFocusScore] = useState<number | null>(null);
@@ -53,15 +52,10 @@ export default function App() {
   const peakingCanvasRef = useRef<HTMLCanvasElement>(null);
   const [zoomPos, setZoomPos] = useState({ x: 50, y: 50 });
   const zoomDragRef = useRef({ isDragging: false, startX: 0, startY: 0, startPosX: 50, startPosY: 50 });
-  const showFocusAssistRef = useRef(false);
   
   useEffect(() => {
     liveViewActiveRef.current = liveViewActive;
   }, [liveViewActive]);
-
-  useEffect(() => {
-    showFocusAssistRef.current = showFocusAssist;
-  }, [showFocusAssist]);
 
   const [galleryOpen, setGalleryOpen] = useState(false);
   const [galleryPhotos, setGalleryPhotos] = useState<{ handle: number, url: string, thumbBuffer: ArrayBuffer }[]>([]);
@@ -69,23 +63,20 @@ export default function App() {
   const [lastPhoto, setLastPhoto] = useState<{ url: string; iso: string; aperture: string; shutter: string; shutterCount?: number | null; cameraModel?: string; hist: number[]; maxHist: number } | null>(null);
   const [isFetchingPhoto, setIsFetchingPhoto] = useState(false);
 
-  // Algoritmo de Focus Peaking y cálculo FWHM restaurado y funcional
+  // Algoritmo Real de Focus Peaking y cálculo FWHM
   useEffect(() => {
     let animId: number;
     let lastTime = 0;
     const fps = 15;
     const interval = 1000 / fps;
+    let isCancelled = false;
 
     const renderPeaking = (now: number) => {
-      if ((!showFocusPeaking && !showFocusAssistRef.current) || !videoRef.current || !peakingCanvasRef.current) {
-        if (peakingCanvasRef.current) {
-           const ctx = peakingCanvasRef.current.getContext('2d');
-           if (ctx) ctx.clearRect(0, 0, peakingCanvasRef.current.width, peakingCanvasRef.current.height);
-        }
-        if (showFocusPeaking || showFocusAssistRef.current) {
-           animId = requestAnimationFrame(renderPeaking);
-        }
-        return;
+      if (isCancelled) return;
+      
+      if (!videoRef.current || !peakingCanvasRef.current) {
+         animId = requestAnimationFrame(renderPeaking);
+         return;
       }
 
       animId = requestAnimationFrame(renderPeaking);
@@ -141,10 +132,10 @@ export default function App() {
           if (diffX + diffY > maxEdge) maxEdge = diffX + diffY;
 
           if (showFocusPeaking && (diffX > threshold * 3 || diffY > threshold * 3)) {
-            out[i] = 255;
-            out[i+1] = 0;
-            out[i+2] = 0;
-            out[i+3] = 255;
+            out[i] = 255;   // R
+            out[i+1] = 0;   // G
+            out[i+2] = 0;   // B
+            out[i+3] = 255; // Alpha
           }
         }
       }
@@ -155,15 +146,24 @@ export default function App() {
          ctx.clearRect(0, 0, cw, ch);
       }
 
-      if (showFocusAssistRef.current) {
-         setFocusScore(Math.floor(maxEdge / 5)); // Calculo básico para el score
+      if (showFocusAssist) {
+         setFocusScore(Math.floor(maxEdge / 5)); // Calculo para el score FWHM
       }
     };
 
     if (showFocusPeaking || showFocusAssist) {
       animId = requestAnimationFrame(renderPeaking);
+    } else {
+      if (peakingCanvasRef.current) {
+         const ctx = peakingCanvasRef.current.getContext('2d');
+         if (ctx) ctx.clearRect(0, 0, peakingCanvasRef.current.width, peakingCanvasRef.current.height);
+      }
     }
-    return () => cancelAnimationFrame(animId);
+
+    return () => {
+      isCancelled = true;
+      cancelAnimationFrame(animId);
+    };
   }, [showFocusPeaking, showFocusAssist]);
   
   const fetchGallery = async () => {
@@ -177,7 +177,7 @@ export default function App() {
         return;
       }
       
-      const recentHandles = handles.slice(-5).reverse(); // Last 5, newest first
+      const recentHandles = handles.slice(-5).reverse();
       setStatusText(`Descargando ${recentHandles.length} fotos...`);
       
       let fetchedPhotos = [];
@@ -408,7 +408,6 @@ export default function App() {
         console.warn("Could not set destination", e);
       }
 
-      // HACK CANON: Poner en PC Connect Mode (0x9114) y Remote Mode (0x9115)
       try {
         if ((cam as any).device && (cam as any).device.sendCommand) {
           console.log("Iniciando modo PC Connect para Canon...");
@@ -867,211 +866,213 @@ export default function App() {
           </div>
         </div>
 
-        {/* LIVE VIEW */}
-        <div 
-          id="liveview-container" 
-          className={`aspect-video rounded-xl border flex flex-col items-center justify-center gap-2 overflow-hidden relative touch-none ${isRedMode ? 'border-red-900 bg-black' : 'border-neutral-800 bg-neutral-900'}`}
-          onPointerDown={(e) => {
-            if (liveViewZoom <= 1) return;
-            const container = e.currentTarget;
-            container.setPointerCapture(e.pointerId);
-            zoomDragRef.current = {
-              isDragging: true,
-              startX: e.clientX,
-              startY: e.clientY,
-              startPosX: zoomPos.x,
-              startPosY: zoomPos.y
-            };
-          }}
-          onPointerMove={(e) => {
-            if (zoomDragRef.current.isDragging && liveViewZoom > 1) {
-              const rect = e.currentTarget.getBoundingClientRect();
-              const dx = e.clientX - zoomDragRef.current.startX;
-              const dy = e.clientY - zoomDragRef.current.startY;
-              
-              const sensitivityX = 100 / (rect.width * (liveViewZoom * 0.5));
-              const sensitivityY = 100 / (rect.height * (liveViewZoom * 0.5));
-              
-              let newX = zoomDragRef.current.startPosX - (dx * sensitivityX);
-              let newY = zoomDragRef.current.startPosY - (dy * sensitivityY);
-              
-              newX = Math.max(0, Math.min(100, newX));
-              newY = Math.max(0, Math.min(100, newY));
-              
-              setZoomPos({ x: newX, y: newY });
-            }
-          }}
-          onPointerUp={(e) => {
-            zoomDragRef.current.isDragging = false;
-            e.currentTarget.releasePointerCapture(e.pointerId);
-          }}
-          onPointerCancel={(e) => {
-            zoomDragRef.current.isDragging = false;
-            e.currentTarget.releasePointerCapture(e.pointerId);
-          }}
-        >
-          {liveViewActive && (
-            <div className="absolute top-4 left-4 z-30 flex flex-col gap-2">
-              <button 
-                onClick={() => setLiveViewZoom(prev => Math.min(prev + 1, 10))}
-                className="p-2 bg-black/60 text-white rounded-full hover:bg-black/90 backdrop-blur-sm transition-colors border border-white/10"
-                title="Acercar (Zoom In)"
-              >
-                <ZoomIn className="w-5 h-5" />
-              </button>
-              {liveViewZoom > 1 && (
-                <button 
-                  onClick={() => { setLiveViewZoom(1); setZoomPos({x:50, y:50}); }}
-                  className="p-2 bg-black/60 text-white rounded-full hover:bg-black/90 backdrop-blur-sm transition-colors border border-white/10 font-bold text-xs flex items-center justify-center w-9 h-9"
-                  title="Restablecer Zoom"
-                >
-                  {liveViewZoom}x
-                </button>
-              )}
-              <button 
-                onClick={() => setLiveViewZoom(prev => Math.max(prev - 1, 1))}
-                className="p-2 bg-black/60 text-white rounded-full hover:bg-black/90 backdrop-blur-sm transition-colors border border-white/10"
-                title="Alejar (Zoom Out)"
-              >
-                <ZoomOut className="w-5 h-5" />
-              </button>
-            </div>
-          )}
-
-          {/* MENÚ FLOTANTE DERECHO (UI Arreglada) */}
-          {liveViewActive && (
-            <div className="absolute top-4 right-4 flex flex-col gap-3 z-30">
-              <button 
-                onClick={() => {
-                   const container = document.getElementById("liveview-container");
-                   if (container) {
-                      if (document.fullscreenElement) {
-                         document.exitFullscreen();
-                      } else {
-                         container.requestFullscreen().catch(()=>{});
-                         if (screen && screen.orientation && ((screen.orientation as any).lock as any)) {
-                             ((screen.orientation as any).lock as any)("landscape").catch(()=>{});
-                         }
-                      }
-                   }
-                }}
-                className="p-2 bg-black/60 text-white rounded-full hover:bg-black/90 backdrop-blur-sm transition-colors border border-white/10"
-                title="Mostrar/Ocultar Pantalla Completa"
-              >
-                {isFullscreen ? <Minimize className="w-5 h-5" /> : <Maximize className="w-5 h-5" />}
-              </button>
-
-              <button 
-                onClick={() => setShowGrid(!showGrid)}
-                className={`p-2 rounded-full backdrop-blur-sm transition-colors border border-white/10 ${showGrid ? 'bg-white/20 text-white' : 'bg-black/60 text-white hover:bg-black/90'}`}
-                title="Mostrar/Ocultar Cuadrícula"
-              >
-                <Grid className="w-5 h-5" />
-              </button>
-
-              <button 
-                onClick={() => setShowFocusAssist(!showFocusAssist)}
-                className={`p-2 rounded-full backdrop-blur-sm transition-all border border-white/10 ${showFocusAssist ? 'bg-cyan-600/80 text-white shadow-[0_0_15px_rgba(34,211,238,0.5)]' : 'bg-black/60 text-white hover:bg-black/90'}`}
-                title="Asistente de Enfoque (FWHM)"
-              >
-                <Target className="w-5 h-5" />
-              </button>
-              
-              <button
-                onClick={triggerAutoFocus}
-                disabled={isAutoFocusing}
-                className={`p-2 rounded-full backdrop-blur-sm transition-colors border border-white/10 ${
-                  isAutoFocusing ? 'bg-cyan-600/80 text-white animate-pulse' : 'bg-black/60 text-white hover:bg-black/90'
-                }`}
-                title="Auto Enfoque"
-              >
-                <Scan className={`w-5 h-5 ${isAutoFocusing ? 'animate-spin' : ''}`} />
-              </button>
-
-              <button
-                onClick={() => setShowFocusPeaking(!showFocusPeaking)}
-                className={`p-2 rounded-full backdrop-blur-sm transition-all border border-white/10 ${
-                  showFocusPeaking 
-                    ? 'bg-red-600/80 text-white shadow-[0_0_15px_rgba(220,38,38,0.5)]' 
-                    : 'bg-black/60 text-white hover:bg-black/90'
-                }`}
-                title="Focus Peaking (Resaltar Bordes)"
-              >
-                <Activity className="w-5 h-5" />
-              </button>
-            </div>
-          )}
-
+        {/* LIVE VIEW SECTION */}
+        <div className="flex flex-col gap-2">
           <div 
-            className="absolute inset-0 w-full h-full"
-            style={{
-              transform: `scale(${liveViewZoom})`,
-              transformOrigin: `${zoomPos.x}% ${zoomPos.y}%`,
-              transition: zoomDragRef.current.isDragging ? 'none' : 'transform 0.2s ease-out'
+            id="liveview-container" 
+            className={`aspect-video rounded-xl border flex flex-col items-center justify-center overflow-hidden relative touch-none ${isRedMode ? 'border-red-900 bg-black' : 'border-neutral-800 bg-neutral-900'}`}
+            onPointerDown={(e) => {
+              if (liveViewZoom <= 1) return;
+              const container = e.currentTarget;
+              container.setPointerCapture(e.pointerId);
+              zoomDragRef.current = {
+                isDragging: true,
+                startX: e.clientX,
+                startY: e.clientY,
+                startPosX: zoomPos.x,
+                startPosY: zoomPos.y
+              };
+            }}
+            onPointerMove={(e) => {
+              if (zoomDragRef.current.isDragging && liveViewZoom > 1) {
+                const rect = e.currentTarget.getBoundingClientRect();
+                const dx = e.clientX - zoomDragRef.current.startX;
+                const dy = e.clientY - zoomDragRef.current.startY;
+                
+                const sensitivityX = 100 / (rect.width * (liveViewZoom * 0.5));
+                const sensitivityY = 100 / (rect.height * (liveViewZoom * 0.5));
+                
+                let newX = zoomDragRef.current.startPosX - (dx * sensitivityX);
+                let newY = zoomDragRef.current.startPosY - (dy * sensitivityY);
+                
+                newX = Math.max(0, Math.min(100, newX));
+                newY = Math.max(0, Math.min(100, newY));
+                
+                setZoomPos({ x: newX, y: newY });
+              }
+            }}
+            onPointerUp={(e) => {
+              zoomDragRef.current.isDragging = false;
+              e.currentTarget.releasePointerCapture(e.pointerId);
+            }}
+            onPointerCancel={(e) => {
+              zoomDragRef.current.isDragging = false;
+              e.currentTarget.releasePointerCapture(e.pointerId);
             }}
           >
-            {/* INDICADOR DE ENFOQUE FWHM EN PANTALLA */}
-            {liveViewActive && showFocusAssist && (
-              <div className="absolute top-4 left-1/2 -translate-x-1/2 z-20 bg-black/70 backdrop-blur-md border border-neutral-700 px-6 py-2 rounded-xl text-white font-mono flex flex-col items-center shadow-lg pointer-events-none">
-                <span className="text-[10px] text-cyan-400 font-bold uppercase tracking-widest mb-1">Enfoque (FWHM)</span>
-                {focusScore !== null ? (
-                   <div className="flex items-baseline gap-1">
-                     <span className="text-3xl font-black">{focusScore}</span>
-                     <span className="text-sm opacity-50">px</span>
-                   </div>
-                ) : (
-                   <span className="text-sm opacity-50 text-center">Analizando...</span>
+            {liveViewActive && (
+              <div className="absolute top-4 left-4 z-30 flex flex-col gap-2">
+                <button 
+                  onClick={() => setLiveViewZoom(prev => Math.min(prev + 1, 10))}
+                  className="p-2 bg-black/60 text-white rounded-full hover:bg-black/90 backdrop-blur-sm transition-colors border border-white/10"
+                  title="Acercar (Zoom In)"
+                >
+                  <ZoomIn className="w-5 h-5" />
+                </button>
+                {liveViewZoom > 1 && (
+                  <button 
+                    onClick={() => { setLiveViewZoom(1); setZoomPos({x:50, y:50}); }}
+                    className="p-2 bg-black/60 text-white rounded-full hover:bg-black/90 backdrop-blur-sm transition-colors border border-white/10 font-bold text-xs flex items-center justify-center w-9 h-9"
+                    title="Restablecer Zoom"
+                  >
+                    {liveViewZoom}x
+                  </button>
                 )}
-                {focusScore !== null && (
-                  <div className="w-full bg-neutral-800 h-1.5 mt-2 rounded-full overflow-hidden">
-                     <div 
-                       className="h-full bg-cyan-400 transition-all duration-75"
-                       style={{ width: `${Math.min(100, (focusScore / 20) * 100)}%` }}
-                     />
-                  </div>
-                )}
+                <button 
+                  onClick={() => setLiveViewZoom(prev => Math.max(prev - 1, 1))}
+                  className="p-2 bg-black/60 text-white rounded-full hover:bg-black/90 backdrop-blur-sm transition-colors border border-white/10"
+                  title="Alejar (Zoom Out)"
+                >
+                  <ZoomOut className="w-5 h-5" />
+                </button>
               </div>
             )}
 
-            <img 
-              ref={videoRef as any}
-              className={`absolute inset-0 w-full h-full object-contain transition-opacity ${liveViewActive ? 'opacity-100' : 'opacity-0'}`} 
-            />
+            {/* MENÚ FLOTANTE DERECHO (Herramientas de Enfoque) */}
+            {liveViewActive && (
+              <div className="absolute top-4 right-4 flex flex-col gap-3 z-30">
+                <button 
+                  onClick={() => {
+                     const container = document.getElementById("liveview-container");
+                     if (container) {
+                        if (document.fullscreenElement) {
+                           document.exitFullscreen();
+                        } else {
+                           container.requestFullscreen().catch(()=>{});
+                           if (screen && screen.orientation && ((screen.orientation as any).lock as any)) {
+                               ((screen.orientation as any).lock as any)("landscape").catch(()=>{});
+                           }
+                        }
+                     }
+                  }}
+                  className="p-2 bg-black/60 text-white rounded-full hover:bg-black/90 backdrop-blur-sm transition-colors border border-white/10"
+                  title="Mostrar/Ocultar Pantalla Completa"
+                >
+                  {isFullscreen ? <Minimize className="w-5 h-5" /> : <Maximize className="w-5 h-5" />}
+                </button>
 
-            {/* CANVAS PARA EL FOCUS PEAKING REAL */}
-            <canvas
-              ref={peakingCanvasRef}
-              className={`absolute inset-0 w-full h-full object-contain pointer-events-none z-10 transition-opacity ${((showFocusPeaking || showFocusAssist) && liveViewActive) ? 'opacity-100' : 'opacity-0'}`}
-            />
+                <button 
+                  onClick={() => setShowGrid(!showGrid)}
+                  className={`p-2 rounded-full backdrop-blur-sm transition-colors border border-white/10 ${showGrid ? 'bg-white/20 text-white' : 'bg-black/60 text-white hover:bg-black/90'}`}
+                  title="Mostrar/Ocultar Cuadrícula"
+                >
+                  <Grid className="w-5 h-5" />
+                </button>
 
-            {/* CUADRÍCULA Y MARCA CENTRAL */}
-            {liveViewActive && showGrid && (
-              <div className="absolute inset-0 pointer-events-none z-10 flex items-center justify-center">
-                {/* Cuadrícula de tercios */}
-                <div className="absolute top-1/3 left-0 right-0 border-t border-white/20 shadow-sm"></div>
-                <div className="absolute top-2/3 left-0 right-0 border-t border-white/20 shadow-sm"></div>
-                <div className="absolute left-1/3 top-0 bottom-0 border-l border-white/20 shadow-sm"></div>
-                <div className="absolute left-2/3 top-0 bottom-0 border-l border-white/20 shadow-sm"></div>
+                <button 
+                  onClick={() => setShowFocusAssist(!showFocusAssist)}
+                  className={`p-2 rounded-full backdrop-blur-sm transition-all border border-white/10 ${showFocusAssist ? 'bg-cyan-600/80 text-white shadow-[0_0_15px_rgba(34,211,238,0.5)]' : 'bg-black/60 text-white hover:bg-black/90'}`}
+                  title="Asistente de Enfoque (Diana/FWHM)"
+                >
+                  <Target className="w-5 h-5" />
+                </button>
                 
-                {/* Marca central fina (Crosshair) con hueco en medio */}
-                <div className="absolute w-12 h-12 opacity-80 flex items-center justify-center drop-shadow-md">
-                  <div className="absolute left-0 w-[40%] h-[1px] bg-red-500"></div>
-                  <div className="absolute right-0 w-[40%] h-[1px] bg-red-500"></div>
-                  <div className="absolute top-0 h-[40%] w-[1px] bg-red-500"></div>
-                  <div className="absolute bottom-0 h-[40%] w-[1px] bg-red-500"></div>
-                  <div className="absolute w-2 h-2 border border-red-500 rounded-full"></div>
-                </div>
+                <button
+                  onClick={triggerAutoFocus}
+                  disabled={isAutoFocusing}
+                  className={`p-2 rounded-full backdrop-blur-sm transition-colors border border-white/10 ${
+                    isAutoFocusing ? 'bg-cyan-600/80 text-white animate-pulse' : 'bg-black/60 text-white hover:bg-black/90'
+                  }`}
+                  title="Auto Enfoque"
+                >
+                  <Scan className={`w-5 h-5 ${isAutoFocusing ? 'animate-spin' : ''}`} />
+                </button>
+
+                <button
+                  onClick={() => setShowFocusPeaking(!showFocusPeaking)}
+                  className={`p-2 rounded-full backdrop-blur-sm transition-all border border-white/10 ${
+                    showFocusPeaking 
+                      ? 'bg-red-600/80 text-white shadow-[0_0_15px_rgba(220,38,38,0.5)]' 
+                      : 'bg-black/60 text-white hover:bg-black/90'
+                  }`}
+                  title="Focus Peaking (Línea de pulso)"
+                >
+                  <Activity className="w-5 h-5" />
+                </button>
               </div>
+            )}
+
+            <div 
+              className="absolute inset-0 w-full h-full"
+              style={{
+                transform: `scale(${liveViewZoom})`,
+                transformOrigin: `${zoomPos.x}% ${zoomPos.y}%`,
+                transition: zoomDragRef.current.isDragging ? 'none' : 'transform 0.2s ease-out'
+              }}
+            >
+              {/* INDICADOR DE ENFOQUE FWHM (NUMEROS) */}
+              {liveViewActive && showFocusAssist && (
+                <div className="absolute top-4 left-1/2 -translate-x-1/2 z-20 bg-black/70 backdrop-blur-md border border-neutral-700 px-6 py-2 rounded-xl text-white font-mono flex flex-col items-center shadow-lg pointer-events-none">
+                  <span className="text-[10px] text-cyan-400 font-bold uppercase tracking-widest mb-1">Enfoque (FWHM)</span>
+                  {focusScore !== null ? (
+                     <div className="flex items-baseline gap-1">
+                       <span className="text-3xl font-black">{focusScore}</span>
+                       <span className="text-sm opacity-50">px</span>
+                     </div>
+                  ) : (
+                     <span className="text-sm opacity-50 text-center">Analizando...</span>
+                  )}
+                  {focusScore !== null && (
+                    <div className="w-full bg-neutral-800 h-1.5 mt-2 rounded-full overflow-hidden">
+                       <div 
+                         className="h-full bg-cyan-400 transition-all duration-75"
+                         style={{ width: `${Math.min(100, (focusScore / 20) * 100)}%` }}
+                       />
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* IMAGEN DEL LIVE VIEW (Sin filtros raros) */}
+              <img 
+                ref={videoRef as any}
+                className={`absolute inset-0 w-full h-full object-contain transition-opacity ${liveViewActive ? 'opacity-100' : 'opacity-0'}`} 
+              />
+
+              {/* CANVAS QUE PINTA LOS BORDES ROJOS (FOCUS PEAKING) */}
+              <canvas
+                ref={peakingCanvasRef}
+                className={`absolute inset-0 w-full h-full object-contain pointer-events-none z-10 transition-opacity ${((showFocusPeaking || showFocusAssist) && liveViewActive) ? 'opacity-100' : 'opacity-0'}`}
+              />
+
+              {/* CUADRÍCULA Y MARCA CENTRAL */}
+              {liveViewActive && showGrid && (
+                <div className="absolute inset-0 pointer-events-none z-10 flex items-center justify-center">
+                  <div className="absolute top-1/3 left-0 right-0 border-t border-white/20 shadow-sm"></div>
+                  <div className="absolute top-2/3 left-0 right-0 border-t border-white/20 shadow-sm"></div>
+                  <div className="absolute left-1/3 top-0 bottom-0 border-l border-white/20 shadow-sm"></div>
+                  <div className="absolute left-2/3 top-0 bottom-0 border-l border-white/20 shadow-sm"></div>
+                  
+                  <div className="absolute w-12 h-12 opacity-80 flex items-center justify-center drop-shadow-md">
+                    <div className="absolute left-0 w-[40%] h-[1px] bg-red-500"></div>
+                    <div className="absolute right-0 w-[40%] h-[1px] bg-red-500"></div>
+                    <div className="absolute top-0 h-[40%] w-[1px] bg-red-500"></div>
+                    <div className="absolute bottom-0 h-[40%] w-[1px] bg-red-500"></div>
+                    <div className="absolute w-2 h-2 border border-red-500 rounded-full"></div>
+                  </div>
+                </div>
+              )}
+            </div>
+            
+            {!liveViewActive && (
+              <>
+                <MonitorPlay className="w-10 h-10 opacity-30" />
+                <p className="text-sm opacity-50">Live View</p>
+              </>
             )}
           </div>
-          
-          {!liveViewActive && (
-            <>
-              <MonitorPlay className="w-10 h-10 opacity-30" />
-              <p className="text-sm opacity-50">Live View</p>
-            </>
-          )}
-          
+
+          {/* BOTÓN FIJO DE ENCENDIDO (FUERA DEL CONTENEDOR, YA NO SALTA) */}
           <button 
             onClick={async () => {
               if (camera) {
@@ -1181,13 +1182,16 @@ export default function App() {
               }
             }}
             disabled={!camera}
-            className={`mt-2 px-4 py-2 flex items-center gap-2 text-sm font-bold rounded-full border transition-all z-10 shadow-lg 
-              ${camera ? 'opacity-100' : 'opacity-30 cursor-not-allowed'} 
-              ${liveViewActive ? 'absolute bottom-4 left-1/2 -translate-x-1/2 bg-red-600 border-red-500 text-white hover:bg-red-700' : accentClass} 
+            className={`w-full py-3 flex items-center justify-center gap-2 text-sm font-bold rounded-xl border transition-all shadow-lg 
+              ${camera ? 'opacity-100 active:scale-[0.98]' : 'opacity-30 cursor-not-allowed'} 
+              ${liveViewActive 
+                ? (isRedMode ? 'bg-red-900 text-black border-red-700 hover:bg-red-800' : 'bg-neutral-800 text-white border-neutral-600 hover:bg-neutral-700') 
+                : (isRedMode ? 'bg-transparent text-red-500 border-red-900 hover:bg-red-950/30' : 'bg-transparent text-neutral-300 border-neutral-700 hover:bg-neutral-800')
+              } 
             `}
           >
-            {liveViewActive ? <VideoOff className="w-4 h-4" /> : <Video className="w-4 h-4" />}
-            {liveViewActive ? 'Apagar' : 'Encender Pantalla'}
+            {liveViewActive ? <VideoOff className="w-5 h-5" /> : <Video className="w-5 h-5" />}
+            {liveViewActive ? 'Apagar Live View' : 'Encender Live View'}
           </button>
         </div>
 
