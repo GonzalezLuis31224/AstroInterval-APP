@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Camera, Image as ImageIcon, Play, Square, Settings2, Moon, Sun, Usb, MonitorPlay, AlertCircle, Maximize, Minimize, Video, VideoOff, ZoomIn, ZoomOut, Compass, Grid } from 'lucide-react';
+import { Camera, Image as ImageIcon, Play, Square, Settings2, Moon, Sun, Usb, MonitorPlay, AlertCircle, Maximize, Minimize, Video, VideoOff, ZoomIn, ZoomOut, Compass, Grid, Target, Scan } from 'lucide-react';
 import { TethrManager } from 'tethr';
 import exifr from 'exifr';
 import { ParameterDial } from './ParameterDial';
@@ -870,6 +870,42 @@ const loadPhotoDetails = async (handle: number, thumbBuffer: ArrayBuffer, url: s
               <Grid className="w-5 h-5" />
             </button>
           )}
+  {/* BOTÓN DE ENFOQUE ASISTIDO */}
+          {(liveViewActive || isFullscreen) && (
+            <button 
+              onClick={() => setShowFocusAssist(!showFocusAssist)}
+              className={`absolute top-28 right-4 z-20 p-2 text-white rounded-full transition-colors ${showFocusAssist ? 'bg-cyan-600 hover:bg-cyan-500 shadow-[0_0_15px_rgba(34,211,238,0.5)]' : 'bg-black/50 hover:bg-black/80'}`}
+              title="Asistente de Enfoque (FWHM)"
+            >
+              <Target className="w-5 h-5" />
+            </button>
+          )}
+
+          {/* BOTÓN DE AUTO-ENFOQUE (LENTES AF) */}
+          {(liveViewActive || isFullscreen) && (
+            <button 
+              onClick={async () => {
+                 if (camera && (camera as any).device) {
+                     try {
+                        const btn = document.getElementById('af-btn');
+                        if (btn) btn.style.color = '#22d3ee'; // cyan
+                        await (camera as any).device.sendCommand({ opcode: 0x9128, parameters: [1, 0] });
+                        setTimeout(async () => {
+                           await (camera as any).device.sendCommand({ opcode: 0x9129, parameters: [1] }).catch(()=>{});
+                           if (btn) btn.style.color = 'white';
+                        }, 2000);
+                     } catch(e) {
+                        console.error('AF falló', e);
+                     }
+                 }
+              }}
+              id="af-btn"
+              className="absolute top-40 right-4 z-20 p-2 bg-black/50 text-white rounded-full hover:bg-black/80 transition-colors"
+              title="Forzar AutoEnfoque de Cámara (Solo Lentes AF)"
+            >
+              <Scan className="w-5 h-5" />
+            </button>
+          )}
 <div 
             className="absolute inset-0 w-full h-full"
             style={{
@@ -878,6 +914,28 @@ const loadPhotoDetails = async (handle: number, thumbBuffer: ArrayBuffer, url: s
               transition: zoomDragRef.current.isDragging ? 'none' : 'transform 0.2s ease-out'
             }}
           >
+  {/* INDICADOR DE ENFOQUE (FWHM) */}
+            {liveViewActive && showFocusAssist && (
+              <div className="absolute top-4 left-1/2 -translate-x-1/2 z-20 bg-black/70 border border-neutral-700 px-4 py-2 rounded-xl text-white font-mono flex flex-col items-center shadow-lg pointer-events-none">
+                <span className="text-[10px] text-cyan-400 font-bold uppercase tracking-widest mb-1">Enfoque (FWHM)</span>
+                {focusScore !== null ? (
+                   <div className="flex items-baseline gap-1">
+                     <span className="text-3xl font-black">{focusScore}</span>
+                     <span className="text-sm opacity-50">px</span>
+                   </div>
+                ) : (
+                   <span className="text-sm opacity-50 text-center">Centra una<br/>estrella brillante</span>
+                )}
+                {focusScore !== null && (
+                  <div className="w-full bg-neutral-800 h-1 mt-2 rounded-full overflow-hidden">
+                     <div 
+                       className="h-full bg-cyan-400 transition-all"
+                       style={{ width: `${Math.max(0, 100 - (focusScore * 5))}%` }}
+                     />
+                  </div>
+                )}
+              </div>
+            )}
             <img 
               ref={videoRef as any}
               className={`w-full h-full object-contain ${liveViewActive ? 'opacity-100' : 'opacity-0'}`} 
